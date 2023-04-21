@@ -16,9 +16,9 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     exe.addOptions("build_options", exe_opts);
-    exe.install();
+    b.installArtifact(exe);
 
-    const run_cmd = exe.run();
+    const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
@@ -35,5 +35,5 @@ pub fn build(b: *std.Build) void {
     exe_tests.addOptions("build_options", exe_opts);
 
     const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&exe_tests.step);
+    test_step.dependOn(&b.addRunArtifact(exe_tests).step);
 }
