@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
-const Syclld = @import("Syclld.zig");
+const Elf = @import("Elf.zig");
 
 const gpaType = if (builtin.mode == .Debug) std.heap.GeneralPurposeAllocator(.{}) else void;
 var g_alloc: gpaType = .{};
@@ -123,7 +123,7 @@ pub fn main() !void {
         fatal("expected at least one positional argument\n", .{});
     }
 
-    var sycl_ld = try Syclld.openPath(gpa, .{
+    var elf = try Elf.openPath(gpa, .{
         .positionals = positionals.items,
         .libs = libs.keys(),
         .lib_dirs = lib_dirs.items,
@@ -132,6 +132,6 @@ pub fn main() !void {
             .sub_path = out_path orelse "a.out",
         },
     });
-    defer sycl_ld.deinit();
-    try sycl_ld.flush();
+    defer elf.deinit();
+    try elf.flush();
 }

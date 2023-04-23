@@ -1,4 +1,4 @@
-//! Syclld is the driver - it coordinates which stage in the link process should be next executed
+//! Elf is the driver - it coordinates which stage in the link process should be next executed
 //! and produces/flushes the final output executable file.
 
 allocator: Allocator,
@@ -19,7 +19,7 @@ const Options = struct {
     emit: Emit,
 };
 
-pub fn openPath(allocator: Allocator, options: Options) !Syclld {
+pub fn openPath(allocator: Allocator, options: Options) !Elf {
     const file = try options.emit.directory.createFile(options.emit.sub_path, .{
         .truncate = true,
         .read = true,
@@ -27,14 +27,14 @@ pub fn openPath(allocator: Allocator, options: Options) !Syclld {
     });
     errdefer file.close();
 
-    return Syclld{
+    return Elf{
         .allocator = allocator,
         .options = options,
         .file = file,
     };
 }
 
-pub fn deinit(ld: *Syclld) void {
+pub fn deinit(ld: *Elf) void {
     ld.file.close();
 
     for (ld.objects.items) |*object| {
@@ -44,7 +44,7 @@ pub fn deinit(ld: *Syclld) void {
 }
 
 /// Performs the full link and flushes the output executable file.
-pub fn flush(ld: *Syclld) !void {
+pub fn flush(ld: *Elf) !void {
     var arena_allocator = std.heap.ArenaAllocator.init(ld.allocator);
     defer arena_allocator.deinit();
     const arena = arena_allocator.allocator();
@@ -116,7 +116,7 @@ fn resolveLib(
     return null;
 }
 
-fn parsePositionals(ld: *Syclld, files: []const []const u8) !void {
+fn parsePositionals(ld: *Elf, files: []const []const u8) !void {
     for (files) |file_name| {
         const full_path = full_path: {
             var buffer: [std.fs.MAX_PATH_BYTES]u8 = undefined;
@@ -126,29 +126,41 @@ fn parsePositionals(ld: *Syclld, files: []const []const u8) !void {
         defer ld.allocator.free(full_path);
         log.debug("parsing input file path '{s}'", .{full_path});
 
-        const object = Object.parse(ld.allocator, file_name) catch {
-            const stderr = std.io.getStdErr().writer();
-            return stderr.print("unknown filetype for positional input file: '{s}'\n", .{file_name});
-        };
-        try ld.objects.append(ld.allocator, object);
+        blk: {
+            ld.parseObjectFile(full_path) catch |err| switch (err) {
+                error.NotObject => break :blk,
+                else => |e| return e,
+            };
+            continue;
+        }
+        const stderr = std.io.getStdErr().writer();
+        return stderr.print("unknown filetype for positional input file: '{s}'\n", .{file_name});
     }
 }
 
-// fn parseLibs(ld: *Syclld, libs: []const []const u8) !void {
-//     for (libs) |lib| {
-//         log.debug("parsing lib path '{s}'", .{lib});
+fn parseObjectFile(ld: *Elf, path: []const u8) !void {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
 
-//         const archive = try Archive.parse(ld.allocator, lib);
-//         try ld.archives.append(archive);
+    const name = try ld.allocator.dupe(u8, path);
+    errdefer ld.allocator.free(name);
 
-//         const stderr = std.io.getStdErr().writer();
-//         try stderr.print("unknown filetype for a library: '{s}'\n", .{lib});
-//     }
-// }
+    const file_stat = try file.stat();
+    const file_size = std.math.cast(usize, file_stat.size) orelse return error.Overflow;
+    const data = try file.readToEndAlloc(ld.allocator, file_size);
+    errdefer ld.allocator.free(data);
+
+    var obj = Object{
+        .name = name,
+        .data = data,
+    };
+    try obj.parse(ld.allocator);
+    try ld.objects.append(ld.allocator, obj);
+}
 
 const std = @import("std");
 const log = std.log;
 
 const Allocator = std.mem.Allocator;
+const Elf = @This();
 const Object = @import("Object.zig");
-const Syclld = @This();
