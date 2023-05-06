@@ -12,11 +12,12 @@ const usage =
     \\Usage: syclld [files...]
     \\
     \\General Options:
-    \\-l[name]                      Specify library to link against
-    \\-L[path]                      Specify library search dir
-    \\-o [path]                     Specify output path for the final artifact
-    \\-h, --help                    Print this help and exit
-    \\--debug-log [scope]           Turn on debugging logs for [scope]
+    \\-l[value]                      Specify library to link against
+    \\-L[value]                      Specify library search dir
+    \\-m [value]                     Set target emulation
+    \\-o [value]                     Specify output path for the final artifact
+    \\-h, --help                     Print this help and exit
+    \\--debug-log [scope]            Turn on debugging logs for [scope]
     \\
 ;
 
@@ -99,21 +100,34 @@ pub fn main() !void {
     var libs = std.StringArrayHashMap(void).init(arena);
     var lib_dirs = std.ArrayList([]const u8).init(arena);
     var out_path: ?[]const u8 = null;
+    var cpu_arch: ?std.Target.Cpu.Arch = null;
+    var entry: ?[]const u8 = null;
 
-    var args_iter = ArgsIterator{ .args = args };
+    var it = ArgsIterator{ .args = args };
 
-    while (args_iter.next()) |arg| {
+    while (it.next()) |arg| {
         if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             fatal(usage, .{});
         } else if (std.mem.eql(u8, arg, "--debug-log")) {
-            const scope = args_iter.nextOrFatal();
+            const scope = it.nextOrFatal();
             try log_scopes.append(scope);
         } else if (std.mem.startsWith(u8, arg, "-l")) {
             try libs.put(arg[2..], {});
         } else if (std.mem.startsWith(u8, arg, "-L")) {
             try lib_dirs.append(arg[2..]);
         } else if (std.mem.eql(u8, arg, "-o")) {
-            out_path = args_iter.nextOrFatal();
+            out_path = it.nextOrFatal();
+        } else if (std.mem.eql(u8, arg, "-m")) {
+            const target = it.nextOrFatal();
+            if (std.mem.eql(u8, target, "elf_x86_64")) {
+                cpu_arch = .x86_64;
+            } else {
+                fatal("unknown target emulation '{s}'", .{target});
+            }
+        } else if (std.mem.startsWith(u8, arg, "--entry=")) {
+            entry = arg["--entry=".len..];
+        } else if (std.mem.eql(u8, arg, "-e")) {
+            entry = it.nextOrFatal();
         } else {
             try positionals.append(arg);
         }
@@ -131,6 +145,8 @@ pub fn main() !void {
             .directory = std.fs.cwd(),
             .sub_path = out_path orelse "a.out",
         },
+        .cpu_arch = cpu_arch,
+        .entry = entry,
     });
     defer elf.deinit();
     try elf.flush();
