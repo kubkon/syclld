@@ -129,29 +129,6 @@ pub fn initOutputSection(self: *Atom, elf_file: *Elf) !void {
     self.out_shndx = out_shndx;
 }
 
-pub fn scanRelocs(self: Atom, elf_file: *Elf) !void {
-    const gpa = elf_file.allocator;
-    const object = self.getObject(elf_file);
-    for (self.getRelocs(elf_file)) |rel| {
-        // While traversing relocations, synthesize any synthetic entries..
-        switch (rel.r_type()) {
-            elf.R_X86_64_GOTPCREL,
-            elf.R_X86_64_GOTPCRELX,
-            elf.R_X86_64_REX_GOTPCRELX,
-            => {
-                const global = object.getGlobalIndex(rel.r_sym()).?;
-                const gop = try elf_file.got_section.getOrCreate(gpa, global);
-                if (!gop.found_existing) {
-                    log.debug("{}: creating GOT entry: [() -> {s}]", .{
-                        fmtRelocType(rel.r_type()), object.getSymbol(rel.r_sym(), elf_file).getName(elf_file),
-                    });
-                }
-            },
-            else => {},
-        }
-    }
-}
-
 pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
     const gpa = elf_file.allocator;
     const code = try gpa.dupe(u8, self.getCode(elf_file));
@@ -177,35 +154,6 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
                 });
                 mem.writeIntLittle(i64, code[rel.r_offset..][0..8], target_addr);
             },
-            elf.R_X86_64_PC32,
-            elf.R_X86_64_PLT32,
-            => {
-                const displacement = @intCast(i32, @intCast(i64, target.value) - source_addr + rel.r_addend);
-                relocs_log.debug("{}: {x}: [0x{x} => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    source_addr,
-                    target.value,
-                    target_name,
-                });
-                mem.writeIntLittle(i32, code[rel.r_offset..][0..4], displacement);
-            },
-            elf.R_X86_64_GOTPCREL,
-            elf.R_X86_64_GOTPCRELX,
-            elf.R_X86_64_REX_GOTPCRELX,
-            => {
-                const global = object.getGlobalIndex(rel.r_sym()).?;
-                const target_addr = @intCast(i64, elf_file.got_section.getAddress(global, elf_file).?);
-                const displacement = @intCast(i32, target_addr - source_addr + rel.r_addend);
-                relocs_log.debug("{}: {x}: [0x{x} => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    source_addr,
-                    target_addr,
-                    target_name,
-                });
-                mem.writeIntLittle(i32, code[rel.r_offset..][0..4], displacement);
-            },
             elf.R_X86_64_32 => {
                 const target_addr = @intCast(i64, target.value) + rel.r_addend;
                 const scaled = math.cast(u32, target_addr) orelse blk: {
@@ -225,26 +173,6 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
                     target_name,
                 });
                 mem.writeIntLittle(u32, code[rel.r_offset..][0..4], scaled);
-            },
-            elf.R_X86_64_32S => {
-                const target_addr = @intCast(i64, target.value) + rel.r_addend;
-                const scaled = math.cast(i32, target_addr) orelse blk: {
-                    elf_file.fatal("{s}: {}: {x}: target value overflows 32 bits: '{s}' at {x}", .{
-                        object.name,
-                        fmtRelocType(r_type),
-                        source_addr,
-                        target_name,
-                        target_addr,
-                    });
-                    break :blk 0;
-                };
-                relocs_log.debug("{}: {x}: [() => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    scaled,
-                    target_name,
-                });
-                mem.writeIntLittle(i32, code[rel.r_offset..][0..4], scaled);
             },
             else => {
                 elf_file.fatal("unhandled relocation type: {}", .{fmtRelocType(r_type)});
@@ -312,7 +240,7 @@ fn formatRelocType(
         elf.R_X86_64_NUM => "R_X86_64_NUM",
         else => "R_X86_64_UNKNOWN",
     };
-    try writer.print("{s}({d})", .{ str, r_type });
+    try writer.print("{s}", .{str});
 }
 
 pub fn format(
