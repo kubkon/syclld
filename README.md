@@ -5,7 +5,7 @@ Linker Workshop in Vancouver.
 
 ## Part 1
 
-In the first part of the workshop, we will learn how to parse the symbol and string tables in an ELF file.
+In the first part of the workshop, we will learn how to parse input relocatable object files. For each object file, we will create a set of input atoms (per each input section), and a set of input symbols (according to the object's symbol table).
 
 Objectives:
 * understand the format of the ELF file

@@ -1,20 +1,55 @@
 //! Represents an input relocatable object file.
+//! Input relocatable object files are characterised by ET_REL e_type
+//! in the ELF header.
 
+/// Name of this file.
+/// Usually the same as the fully resolved path to the file unless the file
+/// was extracted from an archive; then the name corresponds to the value
+/// exctracted from there.
 name: []const u8,
+
+/// The entire contents of the file allocated and pre-read in one go.
+/// This will make it easier for us to work with different sections within
+/// the file as we will only need to cast pointers when trying to get section's
+/// contents, etc.
 data: []const u8,
+
+/// Sequential id of this object.
+/// Populated by linker's main driver.
 object_id: u32,
 
+/// Parsed file's header.
 header: ?elf.Elf64_Ehdr = null,
+
+/// Input symbol table as encoded within the file.
+/// This represents what we see when running `readelf -s` or `nm -a`
+/// against the input file.
 symtab: []align(1) const elf.Elf64_Sym = &[0]elf.Elf64_Sym{},
+
+/// Input string table.
 strtab: []const u8 = &[0]u8{},
+
+/// Input section headers string table.
 shstrtab: []const u8 = &[0]u8{},
+
+/// Helper variable denoting the start of the global symbols.
 first_global: ?u32 = null,
 
+/// Parsed table of local symbols.
+/// These symbols by definition will not take part in global symbol resolution.
 locals: std.ArrayListUnmanaged(Symbol) = .{},
+
+/// Parsed table of indexes into the global symbol table.
+/// Global symbol table stores unique symbols at the linker level, and
+/// therefore we only store indexes into the global symbol table here.
 globals: std.ArrayListUnmanaged(u32) = .{},
 
+/// Parsed input sections as indexes into the global list of all Atoms
+/// stored at the linker level.
 atoms: std.ArrayListUnmanaged(Atom.Index) = .{},
 
+/// Checks if the header is a relocatable object file.
+/// Returns true if so.
 pub fn isValidHeader(header: *const elf.Elf64_Ehdr) bool {
     if (!mem.eql(u8, header.e_ident[0..4], "\x7fELF")) {
         log.debug("invalid ELF magic '{s}', expected \x7fELF", .{header.e_ident[0..4]});
@@ -43,6 +78,11 @@ pub fn deinit(self: *Object, allocator: Allocator) void {
     allocator.free(self.data);
 }
 
+/// Parses the input object file.
+/// This function:
+/// * reads the object's symbol table (aka the source symbol table)
+/// * parses input sections into atoms
+/// * parses source symbol table into a list of locals and globals
 pub fn parse(self: *Object, elf_file: *Elf) !void {
     var stream = std.io.fixedBufferStream(self.data);
     const reader = stream.reader();
@@ -76,13 +116,12 @@ pub fn parse(self: *Object, elf_file: *Elf) !void {
 fn initAtoms(self: *Object, elf_file: *Elf) !void {
     const shdrs = self.getShdrs();
     try self.atoms.resize(elf_file.allocator, shdrs.len);
-    @memset(self.atoms.items, 0);
+    @memset(self.atoms.items, 0); // Set all indexes to null value represented by index 0.
 
     for (shdrs, 0..) |shdr, i| {
         if (shdr.sh_flags & elf.SHF_EXCLUDE != 0 and
             shdr.sh_flags & elf.SHF_ALLOC == 0 and
-            // shdr.sh_type != elf.SHT_LLVM_ADDRSIG) continue;
-            shdr.sh_type != elf.SHT_LOOS + 0xfff4c03) continue;
+            shdr.sh_type != elf.SHT_LLVM_ADDRSIG) continue;
 
         switch (shdr.sh_type) {
             elf.SHT_GROUP => @panic("TODO"),
@@ -97,7 +136,15 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
                 const shndx = @intCast(u16, i);
                 if (self.skipShdr(shndx)) continue;
                 const name = self.getShString(shdr.sh_name);
-                try self.addAtom(shdr, shndx, name, elf_file);
+                const atom_index = try elf_file.addAtom();
+                const atom = elf_file.getAtom(atom_index).?;
+                atom.atom_index = atom_index;
+                atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
+                atom.object_id = self.object_id;
+                atom.shndx = shndx;
+                atom.size = @intCast(u32, shdr.sh_size);
+                atom.alignment = math.log2_int(u64, shdr.sh_addralign);
+                self.atoms.items[shndx] = atom_index;
             },
         }
     }
@@ -114,31 +161,11 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
     };
 }
 
-fn addAtom(self: *Object, shdr: elf.Elf64_Shdr, shndx: u16, name: [:0]const u8, elf_file: *Elf) !void {
-    const atom_index = try elf_file.addAtom();
-    const atom = elf_file.getAtom(atom_index).?;
-    atom.atom_index = atom_index;
-    atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
-    atom.object_id = self.object_id;
-    atom.shndx = shndx;
-    self.atoms.items[shndx] = atom_index;
-
-    if (shdr.sh_flags & elf.SHF_COMPRESSED != 0) {
-        const data = self.getShdrContents(shndx);
-        const chdr = @ptrCast(*align(1) const elf.Elf64_Chdr, data.ptr).*;
-        atom.size = @intCast(u32, chdr.ch_size);
-        atom.alignment = math.log2_int(u64, chdr.ch_addralign);
-    } else {
-        atom.size = @intCast(u32, shdr.sh_size);
-        atom.alignment = math.log2_int(u64, shdr.sh_addralign);
-    }
-}
-
 fn skipShdr(self: Object, index: u32) bool {
     const shdr = self.getShdrs()[index];
     const name = self.getShString(shdr.sh_name);
     const ignore = blk: {
-        if (shdr.sh_type == 0x70000001) break :blk true; // TODO SHT_X86_64_UNWIND
+        if (shdr.sh_type == elf.SHT_X86_64_UNWIND) break :blk true;
         if (mem.startsWith(u8, name, ".note")) break :blk true;
         if (mem.startsWith(u8, name, ".comment")) break :blk true;
         if (mem.startsWith(u8, name, ".llvm_addrsig")) break :blk true;
