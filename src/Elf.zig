@@ -235,7 +235,6 @@ pub fn flush(self: *Elf) !void {
 
     try self.resolveSyntheticSymbols();
 
-    self.claimUnresolved();
     try self.scanRelocs();
     try self.initSections();
     try self.sortSections();
@@ -486,15 +485,6 @@ fn initSegments(self: *Elf) !void {
         if (self.phdrs.items[phdr_index].p_flags != flags) phdr_index += 1;
         self.sections.items(.phdr)[i] = phdr_index;
     }
-
-    // Add PT_GNU_STACK segment that controls some stack attributes that apparently may or may not
-    // be respected by the OS.
-    _ = try self.addSegment(.{
-        .type = elf.PT_GNU_STACK,
-        .flags = elf.PF_W | elf.PF_R,
-        .@"align" = 1,
-        .memsz = 0,
-    });
 
     // Backpatch size of the PHDR segment now that we now how many program headers
     // we actually have.
@@ -858,19 +848,6 @@ fn checkDuplicates(self: *Elf) void {
 fn checkUndefined(self: *Elf) void {
     for (self.objects.items) |object| {
         object.checkUndefined(self);
-    }
-}
-
-fn claimUnresolved(self: *Elf) void {
-    for (self.objects.items) |*object| {
-        for (object.globals.items) |index| {
-            const global = self.getGlobal(index);
-
-            if (global.isUndef(self) and global.isWeak(self)) {
-                global.value = 0;
-                continue;
-            }
-        }
     }
 }
 
