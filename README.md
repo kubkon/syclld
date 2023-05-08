@@ -3,6 +3,110 @@
 This repo contains the source code and actual instructions for participating in the SYCL 2023
 Linker Workshop in Vancouver.
 
+I thought long and hard how to organise the learning material and converged on the idea of starting with
+a linker model that only handles the simplest of cases first. This is how I would learn to handle linking
+on the target platform - start with something functional for the simplest possible case and build more
+functionality from there. And so, for this workshop, we will do the same. We will start very small, and
+thanks to the fact that Linux is a very stable kernel, we can write a functional program that invokes `exit`
+syscall without any `libc` involved whatsoever. After we get it working for the simplest case, we can start 
+working from there to handle some more interesting cases in an incremental and trackable manner.
+
+## Part 0 - prerequisites
+
+We will need the following tools to work through the workshop:
+
+* `git` - OS dependent
+* `zig` - [`ziglang.org/download`](https://ziglang.org/download/)
+* `zelf` - [TODO]()
+* `zig-objdump` - [TODO]()
+* `blink` - [TODO]()
+
+If you are developing natively on Linux (or in a VM!), feel free to swap out `zelf` for `readelf`,
+`zig-objdump` for `objdump`, and `blink` for `gdb`.
+
+Next, clone this repo:
+
+```
+$ git clone https://github.com/kubkon/syclld
+```
+
+And verify we can actually build it:
+
+```
+$ cd syclld
+$ zig build
+```
+
+You should not expect any errors at this stage, so if you do please shout out!
+
+## Part 1 - let's get the ball rolling!
+
+In the first part of the workshop, we will be working towards getting this simple C program to link
+correctly:
+
+```c
+// simple.c
+void _start() {
+  asm volatile ("movq $60, %rax\n\t"
+      "movq $0, %rdi\n\t"
+      "syscall");
+}
+```
+
+If you know a little bit of `x86_64` assembly, you will quickly recognise that all we do here is
+invoke the `exit` syscall with status/error code of `0` meaning `ESUCCESS`. It is also customary on Linux
+to denote the entrypoint, i.e., function that will be called first by the kernel or dynamic linker, as `_start`.
+This contrived input example is perfect as it will generate the smallest possible relocatable object
+file that is easily managed.
+
+### 1.1 compiling the input
+
+Copy-paste the above snippet into `simple.c` source file. Next, fire up your favourite C compiler and
+generate an ELF relocatable file:
+
+```
+$ zig cc -c simple.c -target x86_64-linux
+```
+
+Verify that `simple.o` has indeed been created using `zelf`:
+
+```
+$ zelf -h simple.o
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              REL (Relocatable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          0 (bytes into file)
+  Start of section headers:          1280 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           0 (bytes)
+  Number of program headers:         0
+  Size of section headers:           64 (bytes)
+  Number of section headers:         16
+  Section header string table index: 14
+
+```
+
+Now go ahead and try to link it with `syclld`:
+
+```
+$ zig build run -- simple.o
+```
+
+If all goes well, you should see the following errors on screen:
+
+```
+error: no entrypoint found: '_start'
+```
+
 ## Part 1
 
 In the first part of the workshop, we will learn how to parse input relocatable object files.

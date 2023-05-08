@@ -118,32 +118,17 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
     try self.atoms.resize(elf_file.allocator, shdrs.len);
     @memset(self.atoms.items, 0); // Set all indexes to null value represented by index 0.
 
-    for (shdrs, 0..) |shdr, i| {
-        const shndx = @intCast(u16, i);
-        if (self.skipShdr(shndx)) continue;
-
-        const name = self.getShString(shdr.sh_name);
-        const atom_index = try elf_file.addAtom();
-        const atom = elf_file.getAtom(atom_index).?;
-        atom.atom_index = atom_index;
-        atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
-        atom.object_id = self.object_id;
-        atom.shndx = shndx;
-        atom.size = @intCast(u32, shdr.sh_size);
-        atom.alignment = math.log2_int(u64, shdr.sh_addralign);
-        self.atoms.items[shndx] = atom_index;
-    }
-
-    // Parse relocs sections if any.
-    for (shdrs, 0..) |shdr, i| switch (shdr.sh_type) {
-        elf.SHT_RELA => {
-            const atom_index = self.atoms.items[shdr.sh_info];
-            if (elf_file.getAtom(atom_index)) |atom| {
-                atom.relocs_shndx = @intCast(u16, i);
-            }
-        },
-        else => {},
-    };
+    // TODO: we need to do two things here:
+    // 1) Unpack each input SHDR into an `Atom`.
+    //    In order to create an `Atom`, you can use `Elf.addAtom()` helper.
+    //    If you are in possession of an `atom_index`, you can turn it into a pointer
+    //    via `Elf.getAtom()`.
+    //    You can use `Object.skipShdr` to help you decide if SHDR should be allocated an `Atom`
+    //    or not.
+    // 2) Tie each section containing relocation records SHT_RELA to an existing `Atom`.
+    //    While this will not be needed just yet, once we get to committing atoms to final
+    //    output file, we will need to get each `Atom`'s relocations and resolve them
+    //    (do the so-called fixups).
 }
 
 fn skipShdr(self: Object, index: u32) bool {
@@ -174,54 +159,18 @@ fn skipShdr(self: Object, index: u32) bool {
 fn initSymtab(self: *Object, elf_file: *Elf) !void {
     const gpa = elf_file.allocator;
     const first_global = self.first_global orelse self.symtab.len;
-    const shdrs = self.getShdrs();
-
     try self.locals.ensureTotalCapacityPrecise(gpa, first_global);
     try self.globals.ensureTotalCapacityPrecise(gpa, self.symtab.len - first_global);
 
-    for (self.symtab[0..first_global], 0..) |sym, i| {
-        const symbol = self.locals.addOneAssumeCapacity();
-        const name = blk: {
-            if (sym.st_name == 0 and sym.st_type() == elf.STT_SECTION) {
-                const shdr = shdrs[sym.st_shndx];
-                break :blk self.getShString(shdr.sh_name);
-            }
-            break :blk self.getString(sym.st_name);
-        };
-        symbol.* = .{
-            .value = sym.st_value,
-            .name = try elf_file.string_intern.insert(gpa, name),
-            .sym_idx = @intCast(u32, i),
-            .atom = if (sym.st_shndx == elf.SHN_ABS) 0 else self.atoms.items[sym.st_shndx],
-            .file = self.object_id,
-        };
-    }
-
-    for (self.symtab[first_global..], 0..) |sym, i| {
-        const sym_idx = @intCast(u32, first_global + i);
-        const name = self.getString(sym.st_name);
-        const gop = try elf_file.getOrCreateGlobal(name);
-        if (!gop.found_existing) {
-            const global = elf_file.getGlobal(gop.index);
-            self.setGlobal(sym_idx, global);
-        }
-        self.globals.addOneAssumeCapacity().* = gop.index;
-    }
-}
-
-pub fn resolveSymbols(self: Object, elf_file: *Elf) !void {
-    const first_global = self.first_global orelse return;
-    for (self.globals.items, 0..) |index, i| {
-        const sym_idx = @intCast(u32, first_global + i);
-        const this_sym = self.symtab[sym_idx];
-
-        if (this_sym.st_shndx == elf.SHN_UNDEF) continue;
-
-        const global = elf_file.getGlobal(index);
-        if (getSymbolPrecedence(this_sym) < global.getSymbolPrecedence(elf_file)) {
-            self.setGlobal(sym_idx, global);
-        }
-    }
+    // TODO: we need to do two things here:
+    // 1) Unpack each local symbol tying it to a parsed Atom in `Object.initAtoms`. To make tracking symbol
+    //    names consistent, we could use `Elf.string_intern` buffer. This will be very useful for
+    //    symbols that have type `STT_SECTION`.
+    // 2) Unpack each global symbol. We will not resolve any global just yet, however, we will initialize it
+    //    to the first occurrence in any of the input object files. Also, since globals are by definition
+    //    unique to the entire linking process, we store them in a list in the global linker scope `Elf.globals`.
+    //    You can use `Object.setGlobal()` helper to correctly initialize fields of the struct.
+    //    In order to create a new global symbol at the linker scope, you can use `Elf.getOrCreateGlobal()`.
 }
 
 fn setGlobal(self: Object, sym_idx: u32, global: *Symbol) void {
@@ -238,6 +187,21 @@ fn setGlobal(self: Object, sym_idx: u32, global: *Symbol) void {
         .sym_idx = sym_idx,
         .file = self.object_id,
     };
+}
+
+pub fn resolveSymbols(self: Object, elf_file: *Elf) !void {
+    const first_global = self.first_global orelse return;
+    for (self.globals.items, 0..) |index, i| {
+        const sym_idx = @intCast(u32, first_global + i);
+        const this_sym = self.symtab[sym_idx];
+
+        if (this_sym.st_shndx == elf.SHN_UNDEF) continue;
+
+        const global = elf_file.getGlobal(index);
+        if (getSymbolPrecedence(this_sym) < global.getSymbolPrecedence(elf_file)) {
+            self.setGlobal(sym_idx, global);
+        }
+    }
 }
 
 pub fn checkDuplicates(self: Object, elf_file: *Elf) void {
