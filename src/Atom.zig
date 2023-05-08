@@ -78,13 +78,16 @@ pub fn initOutputSection(self: *Atom, elf_file: *Elf) !void {
             if (!is_alloc) break :blk .{
                 .name = name,
                 .type = @"type",
-                .flags = flags & ~@as(u32, elf.SHF_COMPRESSED),
+                .flags = flags,
             };
 
             if (is_exec) {
                 const out_name = if (mem.eql(u8, name, ".init"))
                     ".init"
-                else if (mem.eql(u8, name, ".fini")) ".fini" else ".text";
+                else if (mem.eql(u8, name, ".fini"))
+                    ".fini"
+                else
+                    ".text";
                 var out_flags: u32 = elf.SHF_ALLOC | elf.SHF_EXECINSTR;
                 if (is_write) out_flags |= elf.SHF_WRITE;
                 break :blk .{
@@ -94,14 +97,11 @@ pub fn initOutputSection(self: *Atom, elf_file: *Elf) !void {
                 };
             }
 
-            if (is_write) {
-                const out_name = if (mem.startsWith(u8, name, ".data.rel.ro")) ".data.rel.ro" else ".data";
-                break :blk .{
-                    .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-                    .name = out_name,
-                    .type = @"type",
-                };
-            }
+            if (is_write) break :blk .{
+                .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
+                .name = if (mem.startsWith(u8, name, ".data.rel.ro")) ".data.rel.ro" else ".data",
+                .type = @"type",
+            };
 
             break :blk .{
                 .flags = elf.SHF_ALLOC,
@@ -155,17 +155,8 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
                 mem.writeIntLittle(i64, code[rel.r_offset..][0..8], target_addr);
             },
             elf.R_X86_64_32 => {
-                const target_addr = @intCast(i64, target.value) + rel.r_addend;
-                const scaled = math.cast(u32, target_addr) orelse blk: {
-                    elf_file.fatal("{s}: {}: {x}: target value overflows 32 bits: '{s}' at {x}", .{
-                        object.name,
-                        fmtRelocType(r_type),
-                        source_addr,
-                        target_name,
-                        target_addr,
-                    });
-                    break :blk 0;
-                };
+                const target_addr = @bitCast(u64, @intCast(i64, target.value) + rel.r_addend);
+                const scaled = @truncate(u32, target_addr);
                 relocs_log.debug("{}: {x}: [() => 0x{x}] ({s})", .{
                     fmtRelocType(r_type),
                     rel.r_offset,
@@ -173,6 +164,17 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
                     target_name,
                 });
                 mem.writeIntLittle(u32, code[rel.r_offset..][0..4], scaled);
+            },
+            elf.R_X86_64_PC32 => {
+                const displacement = @intCast(i32, @intCast(i64, target.value) - source_addr + rel.r_addend);
+                relocs_log.debug("{}: {x}: [0x{x} => 0x{x}] ({s})", .{
+                    fmtRelocType(r_type),
+                    rel.r_offset,
+                    source_addr,
+                    target.value,
+                    target_name,
+                });
+                mem.writeIntLittle(i32, code[rel.r_offset..][0..4], displacement);
             },
             else => {
                 elf_file.fatal("unhandled relocation type: {}", .{fmtRelocType(r_type)});

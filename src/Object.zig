@@ -151,7 +151,7 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
 
     // Parse relocs sections if any.
     for (shdrs, 0..) |shdr, i| switch (shdr.sh_type) {
-        elf.SHT_REL, elf.SHT_RELA => {
+        elf.SHT_RELA => {
             const atom_index = self.atoms.items[shdr.sh_info];
             if (elf_file.getAtom(atom_index)) |atom| {
                 atom.relocs_shndx = @intCast(u16, i);
