@@ -101,7 +101,7 @@ Now go ahead and try to link it with `syclld`:
 $ zig build run -- simple.o
 ```
 
-If all goes well, you should see the following errors on screen:
+If all goes well, you should see the following error on screen:
 
 ```
 error: no entrypoint found: '_start'
