@@ -1,4 +1,6 @@
+/// Dummy symbol table to provide backing storage for synthetic globals.
 symtab: std.ArrayListUnmanaged(elf.Elf64_Sym) = .{},
+/// List of indexes into linker-defined synthetic globals.
 globals: std.ArrayListUnmanaged(u32) = .{},
 
 pub fn deinit(self: *InternalObject, allocator: Allocator) void {
