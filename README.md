@@ -107,6 +107,69 @@ If all goes well, you should see the following error on screen:
 error: no entrypoint found: '_start'
 ```
 
+If you browse through the source files of our linker, you will notice a hefty amount of TODOs left in the
+code. We will work through them one-by-one until we get no errors reported by the linker and our linker
+actually generates *something*. Then, we will work through the bugs until our `simple.c` program links
+correctly and runs fine.
+
+### 1.2 parsing a relocatable object file
+
+The first thing we'll focus on is parsing relocatable object files. Navigate to `src/Object.zig` and find
+`Object.parse`.  This function is responsible for parsing the object's ELF header, input section table, 
+input symbol and string tables, as well as converting input sections and input symbols into `Atom` and 
+`Symbol` respectively. We use those proxy structures to simplify complex relationship between input 
+sections, local and global symbols, garbage collection of unused sections, etc.
+
+In particular, we will focus on implementing two functions that are called within `Object.parse`: `Object.initAtoms` and `Object.initSymtab`.
+
+#### `Object.initAtoms`
+
+TODO what is an input section? what is an atom?
+
+This function should do the following two things:
+
+1. unpack each input section into an `Atom`, and
+2. tie each relocation info section (`SHT_RELA`) to an existing `Atom` created in the previous step.
+
+When unpacking each input section, first we need to decide if we want to keep the section or discard it.
+Normally, we would only discard an input section if we had a really good reason to do it such as `SHF_EXCLUDE`
+flag, however, since we are building a very basic linker we can build upon, we can freely discard more sections.
+Fire up `zelf -S simple.o` and analyse the sections defined in `simple.o`. Sections like `.comment` or 
+`.note` are not needed to get the basic program to run, and neither is `SHT_X86_64_UNWIND` or
+`SHT_LLVM_ADDRSIG`. For your convenience, there is a function available to you that exclude all of the 
+above `Object.skipShdr`.
+
+Having decided which section to skip and which to accept, we need to create an `Atom` and this can be done
+via `Elf.addAtom` function. This function returns an index of the newly created `Atom` instance which we can
+turn into `*Atom` by calling `Elf.getAtom`.
+
+After we traverse all input sections, we need to re-traverse them one more time and link each visited
+relocation info section `SHT_RELA` with a corresponding `Atom` provided it exists.
+
+#### `Object.initSymtab`
+
+Every input symbol table consists of a set of local and global symbols. Local symbols are local to the object
+file and as such do not take part in (global) symbol resolution. Following local symbols in the input symbol
+table are the so-called global symbols. These symbols are exports, imports (undefined symbols), and they do
+take part in (global) symbol resolution that will happen later.
+
+This function should do the following two things:
+
+1. unpack each local symbol tying it to a parsed `Atom` created in `Object.initAtoms`, and
+2. unpack each global symbol into a global symbol reference.
+
+To make tracking of symbol names consistent and simpler, we can use `Elf.string_intern` buffer. This will
+be very useful for locals of type `STT_SECTION`.
+
+When unpacking globals, it is important to realise that we currently don't care about symbol resolution yet.
+For this reason, we will initialise every new global symbol to the first occurrence in any of the input object
+files. Also, since globals are by definition unique to the entire linking process, we store them in the linker-global list `Elf.globals`, and we create an additional by-name index `Elf.globals_table` so that we can refer
+to each global by-index and by-name. The former will be used exclusively after symbol resolution is done, while
+the latter during symbol resolution.
+
+In order to create a new global `Symbol` instance, we can use `Elf.getOrCreateGlobal`. In order to populate a
+global `Symbol` we can use `Object.setGlobal`.
+
 ## Part 1
 
 In the first part of the workshop, we will learn how to parse input relocatable object files.

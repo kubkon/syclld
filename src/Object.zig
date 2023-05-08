@@ -94,7 +94,7 @@ pub fn parse(self: *Object, elf_file: *Elf) !void {
 
     if (symtab_index) |index| {
         const shdr = shdrs[index];
-        self.first_global = shdr.sh_info;
+        self.first_global = shdr.sh_info; // For x86_64-linux denotes the start of globals.
 
         const symtab = self.getShdrContents(index);
         const nsyms = @divExact(symtab.len, @sizeOf(elf.Elf64_Sym));
@@ -159,7 +159,7 @@ fn initSymtab(self: *Object, elf_file: *Elf) !void {
     // 1) Unpack each local symbol tying it to a parsed Atom in `Object.initAtoms`. To make tracking symbol
     //    names consistent, we could use `Elf.string_intern` buffer. This will be very useful for
     //    symbols that have type `STT_SECTION`.
-    // 2) Unpack each global symbol. We will not resolve any global just yet, however, we will initialize it
+    // 2) Unpack each global symbol. We will not resolve any global just yet, however, we will initialise it
     //    to the first occurrence in any of the input object files. Also, since globals are by definition
     //    unique to the entire linking process, we store them in a list in the global linker scope `Elf.globals`.
     //    You can use `Object.setGlobal()` helper to correctly initialize fields of the struct.
