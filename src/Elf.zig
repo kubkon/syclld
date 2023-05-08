@@ -5,7 +5,8 @@ allocator: Allocator,
 options: Options,
 file: std.fs.File,
 
-shoff: ?u64 = 0,
+/// Offset in the file into the output section headers table.
+shoff: u64 = 0,
 
 archives: std.ArrayListUnmanaged(Archive) = .{},
 objects: std.ArrayListUnmanaged(Object) = .{},
@@ -876,10 +877,9 @@ fn writePhdrs(self: *Elf) !void {
 }
 
 fn writeShdrs(self: *Elf) !void {
-    const shoff = self.shoff.?;
     const size = self.sections.items(.shdr).len * @sizeOf(elf.Elf64_Shdr);
-    log.debug("writing section headers from 0x{x} to 0x{x}", .{ shoff, shoff + size });
-    try self.file.pwriteAll(mem.sliceAsBytes(self.sections.items(.shdr)), shoff);
+    log.debug("writing section headers from 0x{x} to 0x{x}", .{ self.shoff, self.shoff + size });
+    try self.file.pwriteAll(mem.sliceAsBytes(self.sections.items(.shdr)), self.shoff);
 }
 
 fn writeHeader(self: *Elf) !void {
