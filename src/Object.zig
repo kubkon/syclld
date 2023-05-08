@@ -119,34 +119,19 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
     @memset(self.atoms.items, 0); // Set all indexes to null value represented by index 0.
 
     for (shdrs, 0..) |shdr, i| {
-        if (shdr.sh_flags & elf.SHF_EXCLUDE != 0 and
-            shdr.sh_flags & elf.SHF_ALLOC == 0 and
-            shdr.sh_type != elf.SHT_LLVM_ADDRSIG) continue;
+        const shndx = @intCast(u16, i);
+        if (self.skipShdr(shndx)) continue;
 
-        switch (shdr.sh_type) {
-            elf.SHT_GROUP => @panic("TODO"),
-            elf.SHT_SYMTAB_SHNDX => @panic("TODO"),
-            elf.SHT_NULL,
-            elf.SHT_REL,
-            elf.SHT_RELA,
-            elf.SHT_SYMTAB,
-            elf.SHT_STRTAB,
-            => {},
-            else => {
-                const shndx = @intCast(u16, i);
-                if (self.skipShdr(shndx)) continue;
-                const name = self.getShString(shdr.sh_name);
-                const atom_index = try elf_file.addAtom();
-                const atom = elf_file.getAtom(atom_index).?;
-                atom.atom_index = atom_index;
-                atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
-                atom.object_id = self.object_id;
-                atom.shndx = shndx;
-                atom.size = @intCast(u32, shdr.sh_size);
-                atom.alignment = math.log2_int(u64, shdr.sh_addralign);
-                self.atoms.items[shndx] = atom_index;
-            },
-        }
+        const name = self.getShString(shdr.sh_name);
+        const atom_index = try elf_file.addAtom();
+        const atom = elf_file.getAtom(atom_index).?;
+        atom.atom_index = atom_index;
+        atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
+        atom.object_id = self.object_id;
+        atom.shndx = shndx;
+        atom.size = @intCast(u32, shdr.sh_size);
+        atom.alignment = math.log2_int(u64, shdr.sh_addralign);
+        self.atoms.items[shndx] = atom_index;
     }
 
     // Parse relocs sections if any.
@@ -163,13 +148,25 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
 
 fn skipShdr(self: Object, index: u32) bool {
     const shdr = self.getShdrs()[index];
-    const name = self.getShString(shdr.sh_name);
-    const ignore = blk: {
-        if (shdr.sh_type == elf.SHT_X86_64_UNWIND) break :blk true;
-        if (mem.startsWith(u8, name, ".note")) break :blk true;
-        if (mem.startsWith(u8, name, ".comment")) break :blk true;
-        if (mem.startsWith(u8, name, ".llvm_addrsig")) break :blk true;
-        break :blk false;
+    const ignore = switch (shdr.sh_type) {
+        elf.SHT_NULL,
+        elf.SHT_REL,
+        elf.SHT_RELA,
+        elf.SHT_SYMTAB,
+        elf.SHT_STRTAB,
+        elf.SHT_GROUP,
+        elf.SHT_SYMTAB_SHNDX,
+        elf.SHT_X86_64_UNWIND,
+        elf.SHT_LLVM_ADDRSIG,
+        => true,
+        else => blk: {
+            if (shdr.sh_flags & elf.SHF_EXCLUDE != 0 and
+                shdr.sh_flags & elf.SHF_ALLOC == 0) break :blk true;
+            const name = self.getShString(shdr.sh_name);
+            if (mem.startsWith(u8, name, ".note")) break :blk true;
+            if (mem.startsWith(u8, name, ".comment")) break :blk true;
+            break :blk false;
+        },
     };
     return ignore;
 }
