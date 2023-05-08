@@ -134,36 +134,12 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
     const code = try gpa.dupe(u8, self.getCode(elf_file));
     defer gpa.free(code);
     const relocs = self.getRelocs(elf_file);
-    const object = self.getObject(elf_file);
 
     for (relocs) |rel| {
-        const target = object.getSymbol(rel.r_sym(), elf_file);
-        const target_name = target.getName(elf_file);
-
+        // TODO: for each relocation type, we need work out what the source and target addresses are,
+        // and write the result in the correct place in the Atom's code/data.
         const r_type = rel.r_type();
         switch (r_type) {
-            elf.R_X86_64_NONE => {},
-            elf.R_X86_64_64 => {
-                const target_addr = @intCast(i64, target.value) + rel.r_addend;
-                relocs_log.debug("{}: {x}: [() => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    target_addr,
-                    target_name,
-                });
-                mem.writeIntLittle(i64, code[rel.r_offset..][0..8], target_addr);
-            },
-            elf.R_X86_64_32 => {
-                const target_addr = @bitCast(u64, @intCast(i64, target.value) + rel.r_addend);
-                const scaled = @truncate(u32, target_addr);
-                relocs_log.debug("{}: {x}: [() => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    scaled,
-                    target_name,
-                });
-                mem.writeIntLittle(u32, code[rel.r_offset..][0..4], scaled);
-            },
             else => {
                 elf_file.fatal("unhandled relocation type: {}", .{fmtRelocType(r_type)});
             },

@@ -48,8 +48,6 @@ globals: std.ArrayListUnmanaged(u32) = .{},
 /// stored at the linker level.
 atoms: std.ArrayListUnmanaged(Atom.Index) = .{},
 
-/// Checks if the header is a relocatable object file.
-/// Returns true if so.
 pub fn isValidHeader(header: *const elf.Elf64_Ehdr) bool {
     if (!mem.eql(u8, header.e_ident[0..4], "\x7fELF")) {
         log.debug("invalid ELF magic '{s}', expected \x7fELF", .{header.e_ident[0..4]});
@@ -78,11 +76,6 @@ pub fn deinit(self: *Object, allocator: Allocator) void {
     allocator.free(self.data);
 }
 
-/// Parses the input object file.
-/// This function:
-/// * reads the object's symbol table (aka the source symbol table)
-/// * parses input sections into atoms
-/// * parses source symbol table into a list of locals and globals
 pub fn parse(self: *Object, elf_file: *Elf) !void {
     var stream = std.io.fixedBufferStream(self.data);
     const reader = stream.reader();
@@ -191,17 +184,14 @@ fn setGlobal(self: Object, sym_idx: u32, global: *Symbol) void {
 
 pub fn resolveSymbols(self: Object, elf_file: *Elf) !void {
     const first_global = self.first_global orelse return;
-    for (self.globals.items, 0..) |index, i| {
-        const sym_idx = @intCast(u32, first_global + i);
-        const this_sym = self.symtab[sym_idx];
-
-        if (this_sym.st_shndx == elf.SHN_UNDEF) continue;
-
-        const global = elf_file.getGlobal(index);
-        if (getSymbolPrecedence(this_sym) < global.getSymbolPrecedence(elf_file)) {
-            self.setGlobal(sym_idx, global);
-        }
-    }
+    _ = first_global;
+    _ = elf_file;
+    // TODO: for each global symbol in the input symbol table (`Object.symtab`)
+    // we need to check if:
+    // 1) the symbol is undefined, just skip it as this object file doesn't define it
+    // 2) otherwise, decide if this symbol ranks higher than the already tracked global symbol
+    //    2.1) if it does, overwrite the global with this symbol
+    //    2.2) otherwise, do nothing
 }
 
 pub fn checkDuplicates(self: Object, elf_file: *Elf) void {
@@ -236,7 +226,7 @@ pub fn checkUndefined(self: Object, elf_file: *Elf) void {
 /// * strong defined
 /// * weak defined
 /// * undefined
-pub inline fn getSymbolPrecedence(sym: elf.Elf64_Sym) u4 {
+pub inline fn getSymbolRank(sym: elf.Elf64_Sym) u4 {
     if (sym.st_shndx == elf.SHN_UNDEF) return 0xf;
     return switch (sym.st_bind()) {
         elf.STB_GLOBAL => 0,
