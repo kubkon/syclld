@@ -255,9 +255,8 @@ pub fn flush(self: *Elf) !void {
     self.allocateNonAllocSections();
 
     self.shoff = blk: {
-        const shdr = self.sections.items(.shdr)[self.sections.len - 1];
-        const offset = shdr.sh_offset + shdr.sh_size;
-        break :blk mem.alignForwardGeneric(u64, offset, @alignOf(elf.Elf64_Shdr));
+        // TODO: work out at what offset we write the SHDRs in the file
+        break :blk 0;
     };
 
     state_log.debug("{}", .{self.dumpState()});
@@ -311,27 +310,13 @@ fn initSections(self: *Elf) !void {
 }
 
 fn calcSectionSizes(self: *Elf) !void {
-    var slice = self.sections.slice();
     for (self.atoms.items[1..], 1..) |*atom, atom_index| {
-        var section = slice.get(atom.out_shndx);
-        const alignment = try math.powi(u64, 2, atom.alignment);
-        const addr = mem.alignForwardGeneric(u64, section.shdr.sh_size, alignment);
-        const padding = addr - section.shdr.sh_size;
-        atom.value = addr;
-        section.shdr.sh_size += padding + atom.size;
-        section.shdr.sh_addralign = @max(section.shdr.sh_addralign, alignment);
-
-        if (section.last_atom) |last_atom_index| {
-            const last_atom = self.getAtom(last_atom_index).?;
-            last_atom.next = @intCast(u32, atom_index);
-            atom.prev = last_atom_index;
-        } else {
-            assert(section.first_atom == null);
-            section.first_atom = @intCast(u32, atom_index);
-        }
-        section.last_atom = @intCast(u32, atom_index);
-
-        slice.set(atom.out_shndx, section);
+        _ = atom;
+        _ = atom_index;
+        // TODO: each Atom will have output section already assigned
+        // for each Atom, we get the output section and append the Atom to the section's
+        // linked-list of Atoms, and simultaneously we work out a relative offset
+        // of each Atom within each section assuming that each section starts at address of 0.
     }
 
     if (self.got_sect_index) |index| {
@@ -341,7 +326,7 @@ fn calcSectionSizes(self: *Elf) !void {
     }
 }
 
-fn getSectionPrecedence(self: *Elf, shdr: elf.Elf64_Shdr) u4 {
+fn getSectionRank(self: *Elf, shdr: elf.Elf64_Shdr) u4 {
     const flags = shdr.sh_flags;
     switch (shdr.sh_type) {
         elf.SHT_NULL => return 0,
@@ -381,7 +366,7 @@ fn sortSections(self: *Elf) !void {
         }
 
         pub fn lessThan(elf_file: *Elf, lhs: @This(), rhs: @This()) bool {
-            return elf_file.getSectionPrecedence(lhs.get(elf_file)) < elf_file.getSectionPrecedence(rhs.get(elf_file));
+            return elf_file.getSectionRank(lhs.get(elf_file)) < elf_file.getSectionRank(rhs.get(elf_file));
         }
     };
 
@@ -495,83 +480,29 @@ fn initSegments(self: *Elf) !void {
 }
 
 fn allocateSegments(self: *Elf) void {
-    // Now that we have initialized segments, we can go ahead and allocate them in memory.
-    var offset: u64 = 0;
-    var vaddr: u64 = default_base_addr;
-    var base_size: u64 = @sizeOf(elf.Elf64_Ehdr);
-    if (self.phdr_seg_index) |index| {
-        const phdr = self.phdrs.items[index];
-        assert(phdr.p_filesz == phdr.p_memsz);
-        base_size += phdr.p_filesz;
-    }
-
-    const first_phdr_index = if (self.phdr_seg_index) |index| index + 1 else 0;
-    for (self.phdrs.items[first_phdr_index..], first_phdr_index..) |*phdr, phdr_index| {
-        const sect_range = self.getSectionIndexes(@intCast(u16, phdr_index));
-        const start = sect_range.start;
-        const end = sect_range.end;
-
-        var filesz: u64 = 0;
-        var memsz: u64 = 0;
-        var file_align: u64 = 1;
-
-        if (phdr_index == first_phdr_index) {
-            filesz += base_size;
-            memsz += base_size;
-        }
-
-        for (self.sections.items(.shdr)[start..end]) |shdr| {
-            file_align = @max(file_align, shdr.sh_addralign);
-            if (shdr.sh_type != elf.SHT_NOBITS) {
-                filesz = mem.alignForwardGeneric(u64, filesz, shdr.sh_addralign) + shdr.sh_size;
-            }
-            memsz = mem.alignForwardGeneric(u64, memsz, shdr.sh_addralign) + shdr.sh_size;
-        }
-
-        offset = mem.alignForwardGeneric(u64, offset, file_align);
-        vaddr = mem.alignForwardGeneric(u64, vaddr, phdr.p_align) + @rem(offset, phdr.p_align);
-
-        phdr.p_offset = offset;
-        phdr.p_vaddr = vaddr;
-        phdr.p_paddr = vaddr;
-        phdr.p_filesz = filesz;
-        phdr.p_memsz = memsz;
-
-        offset += filesz;
-        vaddr += memsz;
-    }
+    _ = self;
+    // TODO: Now that we have initialized segments, we can go ahead and allocate them in memory.
+    // When sorting sections, we ensured that sections sharing permissions (read-only, read-write, etc.)
+    // are next to each other. This was so that we could create the minimal number of loadable
+    // segments that will cover them.
+    // Here, we need to iterate over all segments, calculate their size by accessing all sections
+    // that each segment encompasses (minding the alignment of each section), calculate
+    // max file and memory alignment of each segment, and allocate.
+    // You can use `Elf.getSectionIndexes()` to get a range of section indexes for a given
+    // segment index.
+    // It is important to note that the first loadable segment has to encompass the PHDR program header.
 }
 
 fn allocateAllocSections(self: *Elf) void {
-    const phdrs_offset = self.phdrs.items.len * @sizeOf(elf.Elf64_Phdr) + @sizeOf(elf.Elf64_Ehdr);
-
-    for (self.phdrs.items[1..], 1..) |phdr, phdr_index| {
-        const sect_range = self.getSectionIndexes(@intCast(u16, phdr_index));
-        const start = sect_range.start;
-        const end = sect_range.end;
-        if (start == end) continue;
-
-        var offset = phdr.p_offset;
-        var vaddr = phdr.p_vaddr;
-
-        if (phdr_index == 1) {
-            offset += phdrs_offset;
-            vaddr += phdrs_offset;
-        }
-
-        for (self.sections.items(.shdr)[start..end]) |*shdr| {
-            offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
-            vaddr = mem.alignForwardGeneric(u64, vaddr, shdr.sh_addralign);
-
-            shdr.sh_offset = offset;
-            shdr.sh_addr = vaddr;
-
-            if (shdr.sh_type != elf.SHT_NOBITS) {
-                offset += shdr.sh_size;
-            }
-            vaddr += shdr.sh_size;
-        }
-    }
+    _ = self;
+    // TODO: Here want to allocate each `SHF_ALLOC` section. We can do that as we have allocated each
+    // segment in file and memory which we will use as the starting point for working out offset and
+    // address of each encompassed section by the segment.
+    // For each program header, we iterate the sections it encompasses and allocate them in file and
+    // in memory. You can use `Elf.getSectionIndexes()` to get a range of section indexes for a given
+    // segment index.
+    // It is important to remember that `SHT_NOBITS` sections do not take any space in file, only in
+    // memory.
 }
 
 fn allocateNonAllocSections(self: *Elf) void {
@@ -587,37 +518,24 @@ fn allocateNonAllocSections(self: *Elf) void {
 }
 
 fn allocateAtoms(self: *Elf) void {
-    const slice = self.sections.slice();
-    for (slice.items(.shdr), 0..) |shdr, i| {
-        var atom_index = slice.items(.first_atom)[i] orelse continue;
-
-        while (true) {
-            const atom = self.getAtom(atom_index).?;
-            atom.value += shdr.sh_addr;
-
-            if (atom.next) |next| {
-                atom_index = next;
-            } else break;
-        }
-    }
+    _ = self;
+    // TODO: for each section, traverse the list of Atoms it contains, and the section's address
+    // to make each Atom's address fully allocated.
 }
 
 fn allocateLocals(self: *Elf) void {
-    for (self.objects.items) |*object| {
-        for (object.locals.items) |*symbol| {
-            const atom = symbol.getAtom(self) orelse continue;
-            symbol.value += atom.value;
-            symbol.shndx = atom.out_shndx;
-        }
-    }
+    _ = self;
+    // TODO: for each object file, traverse all local symbols, get the containing Atom,
+    // and add its `Atom.value` to `Symbol.value`.
+    // Note that it might happen that there is no Atom for the given local symbol.
+    // Can you work out why that may be the case?
 }
 
 fn allocateGlobals(self: *Elf) void {
-    for (self.globals.items) |*global| {
-        const atom = global.getAtom(self) orelse continue;
-        global.value += atom.value;
-        global.shndx = atom.out_shndx;
-    }
+    _ = self;
+    // TODO: for each global symbol, get the containing Atom, and add its `Atom.value` to `Symbol.value`.
+    // Note that it might happen that there is no Atom for the given global symbol.
+    // Can you work out why that may be the case?
 }
 
 fn allocateSyntheticSymbols(self: *Elf) void {
@@ -848,53 +766,12 @@ fn checkUndefined(self: *Elf) void {
 
 fn setSymtab(self: *Elf) !void {
     const symtab_sect_index = self.symtab_sect_index orelse return;
-    const gpa = self.allocator;
 
-    for (self.objects.items) |object| {
-        for (object.locals.items) |sym| {
-            const s_sym = sym.getSourceSymbol(self);
-            switch (s_sym.st_type()) {
-                elf.STT_SECTION, elf.STT_NOTYPE => continue,
-                else => {},
-            }
-            switch (@intToEnum(elf.STV, s_sym.st_other)) {
-                .INTERNAL, .HIDDEN => continue,
-                else => {},
-            }
-            const name = try self.strtab.insert(gpa, sym.getName(self));
-            try self.symtab.append(gpa, .{
-                .st_name = name,
-                .st_info = s_sym.st_info,
-                .st_other = s_sym.st_other,
-                .st_shndx = sym.shndx,
-                .st_value = sym.value,
-                .st_size = 0,
-            });
-        }
-    }
-
-    // Denote start of globals.
-    {
-        const shdr = &self.sections.items(.shdr)[symtab_sect_index];
-        shdr.sh_info = @intCast(u32, self.symtab.items.len);
-    }
-
-    for (self.globals.items) |sym| {
-        const s_sym = sym.getSourceSymbol(self);
-        switch (@intToEnum(elf.STV, s_sym.st_other)) {
-            .INTERNAL, .HIDDEN => continue,
-            else => {},
-        }
-        const name = try self.strtab.insert(gpa, sym.getName(self));
-        try self.symtab.append(gpa, .{
-            .st_name = name,
-            .st_info = s_sym.st_info,
-            .st_other = s_sym.st_other,
-            .st_shndx = sym.shndx,
-            .st_value = sym.value,
-            .st_size = 0,
-        });
-    }
+    // TODO: create the output symbol table
+    // we need to traverse each object file, and save all locals first
+    // next, traverse the set of globals and commit them to the output symbol table
+    // optionally, we could exclude symbols that have hidden visibility but it is
+    // not a must
 
     // Set the section sizes
     {
@@ -991,7 +868,8 @@ fn writeShStrtab(self: *Elf) !void {
 }
 
 fn writePhdrs(self: *Elf) !void {
-    const phoff = @sizeOf(elf.Elf64_Ehdr);
+    // TODO: work out at what offset we write the PHDRs in the file
+    const phoff: usize = 0;
     const phdrs_size = self.phdrs.items.len * @sizeOf(elf.Elf64_Phdr);
     log.debug("writing program headers from 0x{x} to 0x{x}", .{ phoff, phoff + phdrs_size });
     try self.file.pwriteAll(mem.sliceAsBytes(self.phdrs.items), phoff);
@@ -1005,34 +883,23 @@ fn writeShdrs(self: *Elf) !void {
 }
 
 fn writeHeader(self: *Elf) !void {
+    // TODO: work out header fields
     var header = elf.Elf64_Ehdr{
         .e_ident = undefined,
-        .e_type = elf.ET.EXEC,
-        .e_machine = self.options.cpu_arch.?.toElfMachine(),
-        .e_version = 1,
-        .e_entry = if (self.entry_index) |index| self.getGlobal(index).value else 0,
-        .e_phoff = @sizeOf(elf.Elf64_Ehdr),
-        .e_shoff = self.shoff.?,
+        .e_type = elf.ET.NONE,
+        .e_machine = elf.EM.NONE,
+        .e_version = 0,
+        .e_entry = 0,
+        .e_phoff = 0,
+        .e_shoff = 0,
         .e_flags = 0,
-        .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
-        .e_phentsize = @sizeOf(elf.Elf64_Phdr),
-        .e_phnum = @intCast(u16, self.phdrs.items.len),
-        .e_shentsize = @sizeOf(elf.Elf64_Shdr),
-        .e_shnum = @intCast(u16, self.sections.items(.shdr).len),
-        .e_shstrndx = self.shstrtab_sect_index.?,
+        .e_ehsize = 0,
+        .e_phentsize = 0,
+        .e_phnum = 0,
+        .e_shentsize = 0,
+        .e_shnum = 0,
+        .e_shstrndx = 0,
     };
-    // Magic
-    mem.copy(u8, header.e_ident[0..4], "\x7fELF");
-    // Class
-    header.e_ident[4] = elf.ELFCLASS64;
-    // Endianness
-    header.e_ident[5] = elf.ELFDATA2LSB;
-    // ELF version
-    header.e_ident[6] = 1;
-    // OS ABI, often set to 0 regardless of target platform
-    // ABI Version, possibly used by glibc but not by static executables
-    // padding
-    @memset(header.e_ident[7..][0..9], 0);
     log.debug("writing ELF header {} at 0x{x}", .{ header, 0 });
     try self.file.pwriteAll(mem.asBytes(&header), 0);
 }

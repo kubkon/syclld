@@ -62,66 +62,14 @@ pub fn getRelocs(self: Atom, elf_file: *Elf) []align(1) const elf.Elf64_Rela {
 pub fn initOutputSection(self: *Atom, elf_file: *Elf) !void {
     const shdr = self.getInputShdr(elf_file);
     const name = self.getName(elf_file);
-    const flags = shdr.sh_flags;
-    const @"type" = shdr.sh_type;
-    const is_alloc = flags & elf.SHF_ALLOC != 0;
-    const is_write = flags & elf.SHF_WRITE != 0;
-    const is_exec = flags & elf.SHF_EXECINSTR != 0;
-    const opts: Elf.AddSectionOpts = switch (@"type") {
-        elf.SHT_NULL => unreachable,
-        elf.SHT_NOBITS => .{
-            .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-            .name = ".bss",
-            .type = @"type",
-        },
-        elf.SHT_PROGBITS => blk: {
-            if (!is_alloc) break :blk .{
-                .name = name,
-                .type = @"type",
-                .flags = flags,
-            };
-
-            if (is_exec) {
-                const out_name = if (mem.eql(u8, name, ".init"))
-                    ".init"
-                else if (mem.eql(u8, name, ".fini"))
-                    ".fini"
-                else
-                    ".text";
-                var out_flags: u32 = elf.SHF_ALLOC | elf.SHF_EXECINSTR;
-                if (is_write) out_flags |= elf.SHF_WRITE;
-                break :blk .{
-                    .flags = out_flags,
-                    .name = out_name,
-                    .type = @"type",
-                };
-            }
-
-            if (is_write) break :blk .{
-                .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-                .name = if (mem.startsWith(u8, name, ".data.rel.ro")) ".data.rel.ro" else ".data",
-                .type = @"type",
-            };
-
-            break :blk .{
-                .flags = elf.SHF_ALLOC,
-                .name = ".rodata",
-                .type = @"type",
-            };
-        },
-        elf.SHT_INIT_ARRAY, elf.SHT_FINI_ARRAY => .{
-            .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-            .name = if (shdr.sh_type == elf.SHT_INIT_ARRAY) ".init_array" else ".fini_array",
-            .type = @"type",
-        },
-        else => .{
-            .name = name,
-            .type = @"type",
-            .flags = flags,
-            .info = shdr.sh_info,
-            .entsize = shdr.sh_entsize,
-        },
-    };
+    _ = shdr;
+    // TODO: To conserve the space, and minimise jump distance, we want to map input sections
+    // to common output sections. For example, when compiled with `-ffunction-sections` flag,
+    // the `.text` section may be split into more atomic sections such as `.text.main`, etc.
+    // In other words, there may be as many as one section per symbol. We need to work out what
+    // each input section should map into. For example, both `.text` and `.text.main` would map
+    // into `.text`, while `.rodata.1` into `.rodata`.
+    const opts: Elf.AddSectionOpts = .{ .name = name };
     const out_shndx = elf_file.getSectionByName(opts.name) orelse try elf_file.addSection(opts);
     if (mem.eql(u8, ".text", opts.name)) {
         elf_file.text_sect_index = out_shndx;
