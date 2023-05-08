@@ -139,7 +139,6 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
     for (relocs) |rel| {
         const target = object.getSymbol(rel.r_sym(), elf_file);
         const target_name = target.getName(elf_file);
-        const source_addr = @intCast(i64, self.value + rel.r_offset);
 
         const r_type = rel.r_type();
         switch (r_type) {
@@ -164,17 +163,6 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
                     target_name,
                 });
                 mem.writeIntLittle(u32, code[rel.r_offset..][0..4], scaled);
-            },
-            elf.R_X86_64_PC32 => {
-                const displacement = @intCast(i32, @intCast(i64, target.value) - source_addr + rel.r_addend);
-                relocs_log.debug("{}: {x}: [0x{x} => 0x{x}] ({s})", .{
-                    fmtRelocType(r_type),
-                    rel.r_offset,
-                    source_addr,
-                    target.value,
-                    target_name,
-                });
-                mem.writeIntLittle(i32, code[rel.r_offset..][0..4], displacement);
             },
             else => {
                 elf_file.fatal("unhandled relocation type: {}", .{fmtRelocType(r_type)});
