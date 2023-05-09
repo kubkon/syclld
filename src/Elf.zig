@@ -104,8 +104,6 @@ pub const Emit = struct {
 };
 
 const Options = struct {
-    cpu_arch: ?std.Target.Cpu.Arch = null,
-    entry: ?[]const u8 = null,
     positionals: []const []const u8,
     libs: []const []const u8,
     lib_dirs: []const []const u8,
@@ -264,13 +262,8 @@ pub fn flush(self: *Elf) !void {
     try self.resolveSymbols();
 
     // Set the entrypoint if found
-    self.entry_index = blk: {
-        const entry_name = self.options.entry orelse "_start";
-        break :blk self.globals_table.get(entry_name) orelse null;
-    };
-    if (self.entry_index == null) {
-        self.fatal("no entrypoint found: '{s}'", .{self.options.entry orelse "_start"});
-    }
+    self.entry_index = self.globals_table.get("_start") orelse null;
+    if (self.entry_index == null) self.fatal("no entrypoint found: '_start'", .{});
 
     self.checkDuplicates();
     self.reportWarningsAndErrorsAndExit();
@@ -676,19 +669,6 @@ fn parseObject(self: *Elf, path: []const u8) !bool {
 
     if (!Object.isValidHeader(&header)) return false;
 
-    const cpu_arch = self.options.cpu_arch orelse blk: {
-        self.options.cpu_arch = header.e_machine.toTargetCpuArch().?;
-        break :blk self.options.cpu_arch.?;
-    };
-    if (cpu_arch != header.e_machine.toTargetCpuArch().?) {
-        self.fatal("{s}: invalid architecture '{s}', expected '{s}'", .{
-            path,
-            @tagName(header.e_machine),
-            @tagName(cpu_arch.toElfMachine()),
-        });
-        return false;
-    }
-
     const file_stat = try file.stat();
     const file_size = math.cast(usize, file_stat.size) orelse return error.Overflow;
     const data = try file.readToEndAlloc(gpa, file_size);
@@ -754,20 +734,6 @@ fn resolveSymbolsInArchives(self: *Elf) !void {
                 error.InvalidHeader => continue,
                 else => |e| return e,
             };
-
-            const header = blk: {
-                var stream = std.io.fixedBufferStream(extracted.data);
-                break :blk try stream.reader().readStruct(elf.Elf64_Ehdr);
-            };
-            const cpu_arch = self.options.cpu_arch.?;
-            if (cpu_arch != header.e_machine.toTargetCpuArch().?) {
-                self.fatal("{s}: invalid architecture '{s}', expected '{s}'", .{
-                    extracted.name,
-                    @tagName(header.e_machine),
-                    @tagName(cpu_arch.toElfMachine()),
-                });
-                continue;
-            }
 
             const object_id = @intCast(u16, self.objects.items.len);
             const object = try self.objects.addOne(self.allocator);

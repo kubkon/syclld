@@ -14,7 +14,6 @@ const usage =
     \\General Options:
     \\-l[value]                      Specify library to link against
     \\-L[value]                      Specify library search dir
-    \\-m [value]                     Set target emulation
     \\-o [value]                     Specify output path for the final artifact
     \\-h, --help                     Print this help and exit
     \\--debug-log [scope]            Turn on debugging logs for [scope]
@@ -100,8 +99,6 @@ pub fn main() !void {
     var libs = std.StringArrayHashMap(void).init(arena);
     var lib_dirs = std.ArrayList([]const u8).init(arena);
     var out_path: ?[]const u8 = null;
-    var cpu_arch: ?std.Target.Cpu.Arch = null;
-    var entry: ?[]const u8 = null;
 
     var it = ArgsIterator{ .args = args };
 
@@ -117,17 +114,6 @@ pub fn main() !void {
             try lib_dirs.append(arg[2..]);
         } else if (std.mem.eql(u8, arg, "-o")) {
             out_path = it.nextOrFatal();
-        } else if (std.mem.eql(u8, arg, "-m")) {
-            const target = it.nextOrFatal();
-            if (std.mem.eql(u8, target, "elf_x86_64")) {
-                cpu_arch = .x86_64;
-            } else {
-                fatal("unknown target emulation '{s}'", .{target});
-            }
-        } else if (std.mem.startsWith(u8, arg, "--entry=")) {
-            entry = arg["--entry=".len..];
-        } else if (std.mem.eql(u8, arg, "-e")) {
-            entry = it.nextOrFatal();
         } else {
             try positionals.append(arg);
         }
@@ -145,8 +131,6 @@ pub fn main() !void {
             .directory = std.fs.cwd(),
             .sub_path = out_path orelse "a.out",
         },
-        .cpu_arch = cpu_arch,
-        .entry = entry,
     });
     defer elf.deinit();
     try elf.flush();
