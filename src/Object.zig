@@ -122,6 +122,30 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
     //    While this will not be needed just yet, once we get to committing atoms to final
     //    output file, we will need to get each `Atom`'s relocations and resolve them
     //    (do the so-called fixups).
+    for (shdrs, 0..) |shdr, i| {
+        if (self.skipShdr(shdr)) continue;
+        const name = self.getShString(shdr.sh_name);
+        const shndx = @intCast(u16, i);
+        const atom_index = try elf_file.addAtom();
+        const atom = elf_file.getAtom(atom_index).?;
+        atom.atom_index = atom_index;
+        atom.name = try elf_file.string_intern.insert(elf_file.allocator, name);
+        atom.object_id = self.object_id;
+        atom.shndx = shndx;
+        atom.size = @intCast(u32, shdr.sh_size);
+        atom.alignment = math.log2_int(u64, shdr.sh_addralign);
+        self.atoms.items[shndx] = atom_index;
+    }
+
+    for (shdrs, 0..) |shdr, i| switch (shdr.sh_type) {
+        elf.SHT_RELA => {
+            const atom_index = self.atoms.items[shdr.sh_info];
+            if (elf_file.getAtom(atom_index)) |atom| {
+                atom.relocs_shndx = @intCast(u16, i);
+            }
+        },
+        else => {},
+    };
 }
 
 fn skipShdr(self: Object, shdr: elf.Elf64_Shdr) bool {
@@ -163,6 +187,35 @@ fn initSymtab(self: *Object, elf_file: *Elf) !void {
     //    unique to the entire linking process, we store them in a list in the global linker scope `Elf.globals`.
     //    You can use `Object.setGlobal()` helper to correctly initialize fields of the struct.
     //    In order to create a new global symbol at the linker scope, you can use `Elf.getOrCreateGlobal()`.
+    const shdrs = self.getShdrs();
+    for (self.symtab[0..first_global], 0..) |sym, i| {
+        const symbol = self.locals.addOneAssumeCapacity();
+        const name = blk: {
+            if (sym.st_name == 0 and sym.st_type() == elf.STT_SECTION) {
+                const shdr = shdrs[sym.st_shndx];
+                break :blk self.getShString(shdr.sh_name);
+            }
+            break :blk self.getString(sym.st_name);
+        };
+        symbol.* = .{
+            .value = sym.st_value,
+            .name = try elf_file.string_intern.insert(gpa, name),
+            .sym_idx = @intCast(u32, i),
+            .atom = if (sym.st_shndx == elf.SHN_ABS) 0 else self.atoms.items[sym.st_shndx],
+            .file = self.object_id,
+        };
+    }
+
+    for (self.symtab[first_global..], 0..) |sym, i| {
+        const sym_idx = @intCast(u32, first_global + i);
+        const name = self.getString(sym.st_name);
+        const gop = try elf_file.getOrCreateGlobal(name);
+        if (!gop.found_existing) {
+            const global = elf_file.getGlobal(gop.index);
+            self.setGlobal(sym_idx, global);
+        }
+        self.globals.addOneAssumeCapacity().* = gop.index;
+    }
 }
 
 fn setGlobal(self: Object, sym_idx: u32, global: *Symbol) void {
