@@ -309,39 +309,41 @@ pub fn flush(self: *Elf) !void {
 }
 
 fn initSections(self: *Elf) !void {
-    for (self.atoms.items[1..]) |*atom| {
-        try atom.initOutputSection(self);
-    }
+    _ = self;
+    // TODO fix it!
+    // for (self.atoms.items[1..]) |*atom| {
+    //     try atom.initOutputSection(self);
+    // }
 
-    if (self.got_section.count() > 0) {
-        self.got_sect_index = try self.addSection(.{
-            .name = ".got",
-            .type = elf.SHT_PROGBITS,
-            .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-            .addralign = @alignOf(u64),
-        });
-    }
+    // if (self.got_section.count() > 0) {
+    //     self.got_sect_index = try self.addSection(.{
+    //         .name = ".got",
+    //         .type = elf.SHT_PROGBITS,
+    //         .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
+    //         .addralign = @alignOf(u64),
+    //     });
+    // }
 
-    self.shstrtab_sect_index = try self.addSection(.{
-        .name = ".shstrtab",
-        .type = elf.SHT_STRTAB,
-        .entsize = 1,
-        .addralign = 1,
-    });
+    // self.shstrtab_sect_index = try self.addSection(.{
+    //     .name = ".shstrtab",
+    //     .type = elf.SHT_STRTAB,
+    //     .entsize = 1,
+    //     .addralign = 1,
+    // });
 
-    self.strtab_sect_index = try self.addSection(.{
-        .name = ".strtab",
-        .type = elf.SHT_STRTAB,
-        .entsize = 1,
-        .addralign = 1,
-    });
-    self.symtab_sect_index = try self.addSection(.{
-        .name = ".symtab",
-        .type = elf.SHT_SYMTAB,
-        .link = self.strtab_sect_index.?,
-        .addralign = @alignOf(elf.Elf64_Sym),
-        .entsize = @sizeOf(elf.Elf64_Sym),
-    });
+    // self.strtab_sect_index = try self.addSection(.{
+    //     .name = ".strtab",
+    //     .type = elf.SHT_STRTAB,
+    //     .entsize = 1,
+    //     .addralign = 1,
+    // });
+    // self.symtab_sect_index = try self.addSection(.{
+    //     .name = ".symtab",
+    //     .type = elf.SHT_SYMTAB,
+    //     .link = self.strtab_sect_index.?,
+    //     .addralign = @alignOf(elf.Elf64_Sym),
+    //     .entsize = @sizeOf(elf.Elf64_Sym),
+    // });
 }
 
 fn calcSectionSizes(self: *Elf) !void {
@@ -793,7 +795,8 @@ fn setSymtab(self: *Elf) !void {
 }
 
 fn setShstrtab(self: *Elf) void {
-    const shdr = &self.sections.items(.shdr)[self.shstrtab_sect_index.?];
+    const shstrtab_sect_index = self.shstrtab_sect_index orelse return;
+    const shdr = &self.sections.items(.shdr)[shstrtab_sect_index];
     shdr.sh_size = self.shstrtab.buffer.items.len;
 }
 
@@ -867,7 +870,8 @@ fn writeStrtab(self: *Elf) !void {
 }
 
 fn writeShStrtab(self: *Elf) !void {
-    const shdr = self.sections.items(.shdr)[self.shstrtab_sect_index.?];
+    const index = self.shstrtab_sect_index orelse return;
+    const shdr = self.sections.items(.shdr)[index];
     log.debug("writing '.shstrtab' contents from 0x{x} to 0x{x}", .{
         shdr.sh_offset,
         shdr.sh_offset + shdr.sh_size,
@@ -877,7 +881,7 @@ fn writeShStrtab(self: *Elf) !void {
 
 fn writePhdrs(self: *Elf) !void {
     // TODO: work out at what offset we write the PHDRs in the file
-    const phoff: usize = 0;
+    const phoff: usize = @sizeOf(elf.Elf64_Ehdr);
     const phdrs_size = self.phdrs.items.len * @sizeOf(elf.Elf64_Phdr);
     log.debug("writing program headers from 0x{x} to 0x{x}", .{ phoff, phoff + phdrs_size });
     try self.file.pwriteAll(mem.sliceAsBytes(self.phdrs.items), phoff);
@@ -902,7 +906,7 @@ fn writeHeader(self: *Elf) !void {
         .e_flags = 0,
         .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
         .e_phentsize = @sizeOf(elf.Elf64_Phdr),
-        .e_phnum = 0, // This will become @intCast(u16, self.phdrs.items.len) once we understand what it means.
+        .e_phnum = @intCast(u16, self.phdrs.items.len),
         .e_shentsize = @sizeOf(elf.Elf64_Shdr),
         .e_shnum = 0, // This will become @intCast(u16, self.sections.items(.shdr).len)
         .e_shstrndx = 0, // This will become self.shstrtab_sect_index.?
