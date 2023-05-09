@@ -112,10 +112,14 @@ code. We will work through them one-by-one until we get no errors reported by th
 actually generates *something*. Then, we will work through the bugs until our `simple.c` program links
 correctly and runs fine.
 
+As you will notice, the main driving function of the linker is `Elf.flush`. This is where we orchestrate every
+next linking stage from.
+
 ### 1.2 parsing a relocatable object file
 
-The first thing we'll focus on is parsing relocatable object files. Navigate to `src/Object.zig` and find
-`Object.parse`.  This function is responsible for parsing the object's ELF header, input section table, 
+The first thing we'll focus on is parsing relocatable object files. Starting from `Elf.flush`, parsing of objects
+is initiated in `Elf.parsePositionals` and next in `Elf.parseObject`. From there we call `Object.parse`.
+This function is responsible for parsing the object's ELF header, input section table, 
 input symbol and string tables, as well as converting input sections and input symbols into `Atom` and 
 `Symbol` respectively. We use those proxy structures to simplify complex relationship between input 
 sections, local and global symbols, garbage collection of unused sections, etc.
@@ -169,4 +173,5 @@ the latter during symbol resolution.
 
 In order to create a new global `Symbol` instance, we can use `Elf.getOrCreateGlobal`. In order to populate a
 global `Symbol` we can use `Object.setGlobal`.
+
 
