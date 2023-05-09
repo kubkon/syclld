@@ -257,7 +257,7 @@ You implement a feature, see it break horribly, you then fire up something battl
 Let's create a valid program with `zig` (`zig` bundles `lld` for ELF btw):
 
 ```
-$ zig cc simple.c -o simple_lld -nostdlib
+$ zig cc simple.c -o simple_lld -nostdlib -target x86_64-linux
 $ zelf -h simple_lld
 ELF Header:
   Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
@@ -286,8 +286,8 @@ calling in to `exit` syscall manually after all, and we define our own `_start` 
 is needed. (Normally, you defined `main` in your program which is bootstrapped via `libc`'s defined `_start` routine
 with command line arguments and environment variables allocated and parsed for us).
 
-While we won't be able to fill all the details just yet as we haven't worked how to allocate `Atom`/`Symbol`s in memory,
-or commit them to file, we can at least make sure we programmatically generate a valid ELF header.
+While we won't be able to fill in all the details just yet as we haven't worked out how to allocate `Atom`/`Symbol`s 
+in memory, or commit them to file, we can at least make sure we programmatically generate a valid ELF header.
 
 Navigate to `Elf.writeHeader` function. This is where we should make adjustments to populate the correct metadata for
 our executable ELF file. Feel free to experiment with it, and verify your results with `zelf -h a.out`. Ideally, in
@@ -306,7 +306,7 @@ ELF Header:
   Machine:                           Advanced Micro Devices X86-64
   Version:                           0x1
   Entry point address:               0x0
-  Start of program headers:          56 (bytes into file)
+  Start of program headers:          64 (bytes into file)
   Start of section headers:          0 (bytes into file)
   Flags:                             0x0
   Size of this header:               64 (bytes)
@@ -316,3 +316,5 @@ ELF Header:
   Number of section headers:         0
   Section header string table index: 0
 ```
+
+
