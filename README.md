@@ -59,7 +59,7 @@ to denote the entrypoint, i.e., function that will be called first by the kernel
 This contrived input example is perfect as it will generate the smallest possible relocatable object
 file that is easily managed.
 
-### 1.1 compiling the input
+### Part 1.1 - compiling the input
 
 Copy-paste the above snippet into `simple.c` source file. Next, fire up your favourite C compiler and
 generate an ELF relocatable file:
@@ -115,7 +115,7 @@ correctly and runs fine.
 As you will notice, the main driving function of the linker is `Elf.flush`. This is where we orchestrate every
 next linking stage from.
 
-### 1.2 parsing a relocatable object file
+### Part 1.2 - parsing a relocatable object file
 
 The first thing we'll focus on is parsing relocatable object files. Starting from `Elf.flush`, parsing of objects
 is initiated in `Elf.parsePositionals` and next in `Elf.parseObject`. From there we call `Object.parse`.
@@ -124,7 +124,8 @@ input symbol and string tables, as well as converting input sections and input s
 `Symbol` respectively. We use those proxy structures to simplify complex relationship between input 
 sections, local and global symbols, garbage collection of unused sections, etc.
 
-In particular, we will focus on implementing two functions that are called within `Object.parse`: `Object.initAtoms` and `Object.initSymtab`.
+In particular, we will focus on implementing two functions that are called within `Object.parse`: 
+`Object.initAtoms` and `Object.initSymtab`.
 
 #### `Object.initAtoms`
 
@@ -167,12 +168,15 @@ be very useful for locals of type `STT_SECTION`.
 
 When unpacking globals, it is important to realise that we currently don't care about symbol resolution yet.
 For this reason, we will initialise every new global symbol to the first occurrence in any of the input object
-files. Also, since globals are by definition unique to the entire linking process, we store them in the linker-global list `Elf.globals`, and we create an additional by-name index `Elf.globals_table` so that we can refer
+files. Also, since globals are by definition unique to the entire linking process, we store them in the linker-global 
+list `Elf.globals`, and we create an additional by-name index `Elf.globals_table` so that we can refer
 to each global by-index and by-name. The former will be used exclusively after symbol resolution is done, while
 the latter during symbol resolution.
 
 In order to create a new global `Symbol` instance, we can use `Elf.getOrCreateGlobal`. In order to populate a
 global `Symbol` we can use `Object.setGlobal`.
+
+### Part 1.3 - checkpoint
 
 Now, let's try re-running the linker and see what happens:
 
@@ -190,3 +194,125 @@ exec: Failed to execute process: './a.out' the file could not be run by the oper
 OK, progress! We have generated *something* but the OS still doesn't really understand what that is. However, this is
 a good starting point to ironing out some common things.
 
+This is a good point to mention that a utility for parsing and pretty printing ELF binaries such as `zelf` or `readelf`
+is your best friend at every stage of implementing a linker. Let's fire it up and see what we actually generated:
+
+```
+$ zelf -a a.out
+ELF Header:
+  Magic:   00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00
+  Class:                             Unknown
+  Data:                              2's complement, unknown endian
+  Version:                           0 (unknown)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              NONE (No file type)
+  Machine:                           None
+  Version:                           0x0
+  Entry point address:               0x0
+  Start of program headers:          0 (bytes into file)
+  Start of section headers:          0 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               0 (bytes)
+  Size of program headers:           0 (bytes)
+  Number of program headers:         0
+  Size of section headers:           0 (bytes)
+  Number of section headers:         0
+  Section header string table index: 0
+
+There are 0 section headers, starting at offset 0x0:
+
+Section Headers:
+  [Nr]  Name              Type              Address           Offset
+        Size              EntSize           Flags  Link  Info  Align
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)
+
+There are no program headers in this file.
+
+There is no relocation info in this file.
+
+There is no symbol table in this file.
+```
+
+Yeah, well, it should be obvious now why the OS refuses to launch the binary - it's empty except for a zero-init
+header!
+
+### Part 2 - generating a valid ELF header
+
+I bet you expected we will implement symbol resolution next. We could have, but we got the linker generate an empty
+ELF file correctly, so why not switch to fixing the header a little bit and see what happens. In fact, symbol resolution
+is currently not very needed as we are linking a single input relocatable object file so we can leave it for later.
+Don't you worry though, we will definitely come back to it sooner rather than later.
+
+OK, so let's try and generate a valid, populated ELF header for an executable. What does that look like though?
+Meet your next very best friend: `lld` (actually, any working linker will do). We will use another linker to generate
+a working executable and compare notes! I should mention here that this comes up a lot during linker writing process.
+You implement a feature, see it break horribly, you then fire up something battle-tested and more advanced such as
+`lld`, and compare the outputs. Fix differences (or work out why they differ), re-run, rinse and repeat.
+
+Let's create a valid program with `zig` (`zig` bundles `lld` for ELF btw):
+
+```
+$ zig cc simple.c -o simple_lld -nostdlib
+$ zelf -h simple_lld
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x2011b0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          1104 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         5
+  Size of section headers:           64 (bytes)
+  Number of section headers:         12
+  Section header string table index: 10
+```
+
+Note that we need to pass `-nostdlib` to `zig cc` so that we don't link against `libc`. We don't need it as we are
+calling in to `exit` syscall manually after all, and we define our own `_start` entrypoint, thus no bootstrapping
+is needed. (Normally, you defined `main` in your program which is bootstrapped via `libc`'s defined `_start` routine
+with command line arguments and environment variables allocated and parsed for us).
+
+While we won't be able to fill all the details just yet as we haven't worked how to allocate `Atom`/`Symbol`s in memory,
+or commit them to file, we can at least make sure we programmatically generate a valid ELF header.
+
+Navigate to `Elf.writeHeader` function. This is where we should make adjustments to populate the correct metadata for
+our executable ELF file. Feel free to experiment with it, and verify your results with `zelf -h a.out`. Ideally, in
+the end, you should see a result similar to:
+
+```
+$ zelf -h a.out
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          56 (bytes into file)
+  Start of section headers:          0 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         0
+  Size of section headers:           64 (bytes)
+  Number of section headers:         0
+  Section header string table index: 0
+```
