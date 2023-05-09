@@ -309,41 +309,39 @@ pub fn flush(self: *Elf) !void {
 }
 
 fn initSections(self: *Elf) !void {
-    _ = self;
-    // TODO fix it!
-    // for (self.atoms.items[1..]) |*atom| {
-    //     try atom.initOutputSection(self);
-    // }
+    for (self.atoms.items[1..]) |*atom| {
+        try atom.initOutputSection(self);
+    }
 
-    // if (self.got_section.count() > 0) {
-    //     self.got_sect_index = try self.addSection(.{
-    //         .name = ".got",
-    //         .type = elf.SHT_PROGBITS,
-    //         .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
-    //         .addralign = @alignOf(u64),
-    //     });
-    // }
+    if (self.got_section.count() > 0) {
+        self.got_sect_index = try self.addSection(.{
+            .name = ".got",
+            .type = elf.SHT_PROGBITS,
+            .flags = elf.SHF_ALLOC | elf.SHF_WRITE,
+            .addralign = @alignOf(u64),
+        });
+    }
 
-    // self.shstrtab_sect_index = try self.addSection(.{
-    //     .name = ".shstrtab",
-    //     .type = elf.SHT_STRTAB,
-    //     .entsize = 1,
-    //     .addralign = 1,
-    // });
+    self.shstrtab_sect_index = try self.addSection(.{
+        .name = ".shstrtab",
+        .type = elf.SHT_STRTAB,
+        .entsize = 1,
+        .addralign = 1,
+    });
 
-    // self.strtab_sect_index = try self.addSection(.{
-    //     .name = ".strtab",
-    //     .type = elf.SHT_STRTAB,
-    //     .entsize = 1,
-    //     .addralign = 1,
-    // });
-    // self.symtab_sect_index = try self.addSection(.{
-    //     .name = ".symtab",
-    //     .type = elf.SHT_SYMTAB,
-    //     .link = self.strtab_sect_index.?,
-    //     .addralign = @alignOf(elf.Elf64_Sym),
-    //     .entsize = @sizeOf(elf.Elf64_Sym),
-    // });
+    self.strtab_sect_index = try self.addSection(.{
+        .name = ".strtab",
+        .type = elf.SHT_STRTAB,
+        .entsize = 1,
+        .addralign = 1,
+    });
+    self.symtab_sect_index = try self.addSection(.{
+        .name = ".symtab",
+        .type = elf.SHT_SYMTAB,
+        .link = self.strtab_sect_index.?,
+        .addralign = @alignOf(elf.Elf64_Sym),
+        .entsize = @sizeOf(elf.Elf64_Sym),
+    });
 }
 
 fn calcSectionSizes(self: *Elf) !void {
@@ -543,15 +541,16 @@ fn allocateAllocSections(self: *Elf) void {
 }
 
 fn allocateNonAllocSections(self: *Elf) void {
-    var offset: u64 = 0;
-    for (self.sections.items(.shdr)) |*shdr| {
-        defer offset = shdr.sh_offset + shdr.sh_size;
+    _ = self;
+    // var offset: u64 = 0;
+    // for (self.sections.items(.shdr)) |*shdr| {
+    //     defer offset = shdr.sh_offset + shdr.sh_size;
 
-        if (shdr.sh_type == elf.SHT_NULL) continue;
-        if (shdr.sh_flags & elf.SHF_ALLOC != 0) continue;
+    //     if (shdr.sh_type == elf.SHT_NULL) continue;
+    //     if (shdr.sh_flags & elf.SHF_ALLOC != 0) continue;
 
-        shdr.sh_offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
-    }
+    //     shdr.sh_offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
+    // }
 }
 
 fn allocateAtoms(self: *Elf) void {

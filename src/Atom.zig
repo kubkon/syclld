@@ -62,14 +62,32 @@ pub fn getRelocs(self: Atom, elf_file: *Elf) []align(1) const elf.Elf64_Rela {
 pub fn initOutputSection(self: *Atom, elf_file: *Elf) !void {
     const shdr = self.getInputShdr(elf_file);
     const name = self.getName(elf_file);
-    _ = shdr;
     // TODO: To conserve the space, and minimise jump distance, we want to map input sections
     // to common output sections. For example, when compiled with `-ffunction-sections` flag,
     // the `.text` section may be split into more atomic sections such as `.text.main`, etc.
     // In other words, there may be as many as one section per symbol. We need to work out what
     // each input section should map into. For example, both `.text` and `.text.main` would map
     // into `.text`, while `.rodata.1` into `.rodata`.
-    const opts: Elf.AddSectionOpts = .{ .name = name };
+    const opts: Elf.AddSectionOpts = switch (shdr.sh_type) {
+        elf.SHT_NULL => unreachable,
+        elf.SHT_PROGBITS => blk: {
+            if (shdr.sh_flags & elf.SHF_ALLOC == 0) break :blk .{
+                .name = name,
+                .type = elf.SHT_PROGBITS,
+                .flags = shdr.sh_flags,
+            };
+            break :blk .{
+                .name = ".text",
+                .type = elf.SHT_PROGBITS,
+                .flags = elf.SHF_ALLOC | elf.SHF_EXECINSTR,
+            };
+        },
+        else => .{
+            .name = name,
+            .type = shdr.sh_type,
+            .flags = shdr.sh_flags,
+        },
+    };
     const out_shndx = elf_file.getSectionByName(opts.name) orelse try elf_file.addSection(opts);
     if (mem.eql(u8, ".text", opts.name)) {
         elf_file.text_sect_index = out_shndx;
