@@ -893,20 +893,32 @@ fn writeHeader(self: *Elf) !void {
     // TODO: work out header fields
     var header = elf.Elf64_Ehdr{
         .e_ident = undefined,
-        .e_type = elf.ET.NONE,
-        .e_machine = elf.EM.NONE,
-        .e_version = 0,
-        .e_entry = 0,
-        .e_phoff = 0,
-        .e_shoff = 0,
+        .e_type = elf.ET.EXEC,
+        .e_machine = elf.EM.X86_64,
+        .e_version = 1,
+        .e_entry = if (self.entry_index) |index| self.getGlobal(index).value else 0,
+        .e_phoff = @sizeOf(elf.Elf64_Ehdr),
+        .e_shoff = self.shoff,
         .e_flags = 0,
-        .e_ehsize = 0,
-        .e_phentsize = 0,
-        .e_phnum = 0,
-        .e_shentsize = 0,
-        .e_shnum = 0,
-        .e_shstrndx = 0,
+        .e_ehsize = @sizeOf(elf.Elf64_Ehdr),
+        .e_phentsize = @sizeOf(elf.Elf64_Phdr),
+        .e_phnum = 0, // This will become @intCast(u16, self.phdrs.items.len) once we understand what it means.
+        .e_shentsize = @sizeOf(elf.Elf64_Shdr),
+        .e_shnum = 0, // This will become @intCast(u16, self.sections.items(.shdr).len)
+        .e_shstrndx = 0, // This will become self.shstrtab_sect_index.?
     };
+    // Magic
+    mem.copy(u8, header.e_ident[0..4], "\x7fELF");
+    // Class
+    header.e_ident[4] = elf.ELFCLASS64;
+    // Endianness
+    header.e_ident[5] = elf.ELFDATA2LSB;
+    // ELF version
+    header.e_ident[6] = 1;
+    // OS ABI, often set to 0 regardless of target platform
+    // ABI Version, possibly used by glibc but not by static executables
+    // padding
+    @memset(header.e_ident[7..][0..9], 0);
     log.debug("writing ELF header {} at 0x{x}", .{ header, 0 });
     try self.file.pwriteAll(mem.asBytes(&header), 0);
 }
