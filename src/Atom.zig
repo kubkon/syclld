@@ -107,7 +107,7 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
         const r_type = rel.r_type();
         switch (r_type) {
             else => {
-                elf_file.fatal("unhandled relocation type: {}", .{fmtRelocType(r_type)});
+                elf_file.warn("unhandled relocation type: {}", .{fmtRelocType(r_type)});
             },
         }
     }

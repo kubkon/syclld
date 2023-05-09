@@ -345,13 +345,31 @@ fn initSections(self: *Elf) !void {
 }
 
 fn calcSectionSizes(self: *Elf) !void {
+    var slice = self.sections.slice();
     for (self.atoms.items[1..], 1..) |*atom, atom_index| {
-        _ = atom;
-        _ = atom_index;
         // TODO: each Atom will have output section already assigned
         // for each Atom, we get the output section and append the Atom to the section's
         // linked-list of Atoms, and simultaneously we work out a relative offset
         // of each Atom within each section assuming that each section starts at address of 0.
+        var section = slice.get(atom.out_shndx);
+        const alignment = try math.powi(u64, 2, atom.alignment);
+        const addr = mem.alignForwardGeneric(u64, section.shdr.sh_size, alignment);
+        const padding = addr - section.shdr.sh_size;
+        atom.value = addr;
+        section.shdr.sh_size += padding + atom.size;
+        section.shdr.sh_addralign = @max(section.shdr.sh_addralign, alignment);
+
+        if (section.last_atom) |last_atom_index| {
+            const last_atom = self.getAtom(last_atom_index).?;
+            last_atom.next = @intCast(u32, atom_index);
+            atom.prev = last_atom_index;
+        } else {
+            assert(section.first_atom == null);
+            section.first_atom = @intCast(u32, atom_index);
+        }
+        section.last_atom = @intCast(u32, atom_index);
+
+        slice.set(atom.out_shndx, section);
     }
 
     if (self.got_sect_index) |index| {
