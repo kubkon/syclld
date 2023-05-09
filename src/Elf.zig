@@ -291,7 +291,9 @@ pub fn flush(self: *Elf) !void {
 
     self.shoff = blk: {
         // TODO: work out at what offset we write the SHDRs in the file
-        break :blk 0;
+        const shdr = self.sections.items(.shdr)[self.sections.len - 1];
+        const offset = shdr.sh_offset + shdr.sh_size;
+        break :blk mem.alignForwardGeneric(u64, offset, @alignOf(elf.Elf64_Shdr));
     };
 
     state_log.debug("{}", .{self.dumpState()});
@@ -533,7 +535,6 @@ fn initSegments(self: *Elf) !void {
 }
 
 fn allocateSegments(self: *Elf) void {
-    _ = self;
     // TODO: Now that we have initialized segments, we can go ahead and allocate them in memory.
     // When sorting sections, we ensured that sections sharing permissions (read-only, read-write, etc.)
     // are next to each other. This was so that we could create the minimal number of loadable
@@ -544,10 +545,51 @@ fn allocateSegments(self: *Elf) void {
     // You can use `Elf.getSectionIndexes()` to get a range of section indexes for a given
     // segment index.
     // It is important to note that the first loadable segment has to encompass the PHDR program header.
+    var offset: u64 = 0;
+    var vaddr: u64 = default_base_addr;
+    var base_size: u64 = @sizeOf(elf.Elf64_Ehdr);
+    if (self.phdr_seg_index) |index| {
+        const phdr = self.phdrs.items[index];
+        assert(phdr.p_filesz == phdr.p_memsz);
+        base_size += phdr.p_filesz;
+    }
+
+    const first_phdr_index = if (self.phdr_seg_index) |index| index + 1 else 0;
+    for (self.phdrs.items[first_phdr_index..], first_phdr_index..) |*phdr, phdr_index| {
+        const sect_range = self.getSectionIndexes(@intCast(u16, phdr_index));
+        const start = sect_range.start;
+        const end = sect_range.end;
+
+        var filesz: u64 = 0;
+        var memsz: u64 = 0;
+        var file_align: u64 = 1;
+
+        if (phdr_index == first_phdr_index) {
+            filesz += base_size;
+            memsz += base_size;
+        }
+
+        for (self.sections.items(.shdr)[start..end]) |shdr| {
+            file_align = @max(file_align, shdr.sh_addralign);
+            filesz = mem.alignForwardGeneric(u64, filesz, shdr.sh_addralign) + shdr.sh_size;
+            memsz = mem.alignForwardGeneric(u64, memsz, shdr.sh_addralign) + shdr.sh_size;
+        }
+
+        offset = mem.alignForwardGeneric(u64, offset, file_align);
+        vaddr = mem.alignForwardGeneric(u64, vaddr, phdr.p_align) + @rem(offset, phdr.p_align);
+
+        phdr.p_offset = offset;
+        phdr.p_vaddr = vaddr;
+        phdr.p_paddr = vaddr;
+        phdr.p_filesz = filesz;
+        phdr.p_memsz = memsz;
+
+        offset += filesz;
+        vaddr += memsz;
+    }
 }
 
 fn allocateAllocSections(self: *Elf) void {
-    _ = self;
     // TODO: Here want to allocate each `SHF_ALLOC` section. We can do that as we have allocated each
     // segment in file and memory which we will use as the starting point for working out offset and
     // address of each encompassed section by the segment.
@@ -556,25 +598,61 @@ fn allocateAllocSections(self: *Elf) void {
     // segment index.
     // It is important to remember that `SHT_NOBITS` sections do not take any space in file, only in
     // memory.
+    const phdrs_offset = self.phdrs.items.len * @sizeOf(elf.Elf64_Phdr) + @sizeOf(elf.Elf64_Ehdr);
+    for (self.phdrs.items[1..], 1..) |phdr, phdr_index| {
+        const sect_range = self.getSectionIndexes(@intCast(u16, phdr_index));
+        const start = sect_range.start;
+        const end = sect_range.end;
+
+        var offset = phdr.p_offset;
+        var vaddr = phdr.p_vaddr;
+
+        if (phdr_index == 1) {
+            offset += phdrs_offset;
+            vaddr += phdrs_offset;
+        }
+
+        for (self.sections.items(.shdr)[start..end]) |*shdr| {
+            offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
+            vaddr = mem.alignForwardGeneric(u64, vaddr, shdr.sh_addralign);
+
+            shdr.sh_offset = offset;
+            shdr.sh_addr = vaddr;
+
+            offset += shdr.sh_size;
+            vaddr += shdr.sh_size;
+        }
+    }
 }
 
 fn allocateNonAllocSections(self: *Elf) void {
-    _ = self;
-    // var offset: u64 = 0;
-    // for (self.sections.items(.shdr)) |*shdr| {
-    //     defer offset = shdr.sh_offset + shdr.sh_size;
+    var offset: u64 = 0;
+    for (self.sections.items(.shdr)) |*shdr| {
+        defer offset = shdr.sh_offset + shdr.sh_size;
 
-    //     if (shdr.sh_type == elf.SHT_NULL) continue;
-    //     if (shdr.sh_flags & elf.SHF_ALLOC != 0) continue;
+        if (shdr.sh_type == elf.SHT_NULL) continue;
+        if (shdr.sh_flags & elf.SHF_ALLOC != 0) continue;
 
-    //     shdr.sh_offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
-    // }
+        shdr.sh_offset = mem.alignForwardGeneric(u64, offset, shdr.sh_addralign);
+    }
 }
 
 fn allocateAtoms(self: *Elf) void {
-    _ = self;
     // TODO: for each section, traverse the list of Atoms it contains, and the section's address
     // to make each Atom's address fully allocated.
+    const slice = self.sections.slice();
+    for (slice.items(.shdr), 0..) |shdr, i| {
+        var atom_index = slice.items(.first_atom)[i] orelse continue;
+
+        while (true) {
+            const atom = self.getAtom(atom_index).?;
+            atom.value += shdr.sh_addr;
+
+            if (atom.next) |next| {
+                atom_index = next;
+            } else break;
+        }
+    }
 }
 
 fn allocateLocals(self: *Elf) void {
@@ -925,8 +1003,8 @@ fn writeHeader(self: *Elf) !void {
         .e_phentsize = @sizeOf(elf.Elf64_Phdr),
         .e_phnum = @intCast(u16, self.phdrs.items.len),
         .e_shentsize = @sizeOf(elf.Elf64_Shdr),
-        .e_shnum = 0, // This will become @intCast(u16, self.sections.items(.shdr).len)
-        .e_shstrndx = 0, // This will become self.shstrtab_sect_index.?
+        .e_shnum = @intCast(u16, self.sections.items(.shdr).len),
+        .e_shstrndx = self.shstrtab_sect_index orelse 0,
     };
     // Magic
     mem.copy(u8, header.e_ident[0..4], "\x7fELF");
