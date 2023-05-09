@@ -379,7 +379,6 @@ headers currently: `PT_PHDR` and `PT_LOAD` with read-only permissions. Instead w
 is amiss. Let's inspect the logs of the linker while we link this result:
 
 ```
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
 debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
   atoms
@@ -451,8 +450,6 @@ and now, but then this adds yet another point of potential bugs. Instead, let us
 Rebuild and rerun the linker:
 
 ```
-$ zig build
-$ syclld simple.o --debug-log elf --debug-log state
 thread 59471 panic: attempt to use null value
 /home/kubkon/dev/syclld/src/Elf.zig:798:70: 0x246e69 in setShstrtab (syclld)
     const shdr = &self.sections.items(.shdr)[self.shstrtab_sect_index.?];
@@ -479,8 +476,6 @@ by checking if we have indeed created the `.shstrtab` section header. Navigate t
 Rebuild and rerun the linker:
 
 ```
-$ zig build
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
 debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
   atoms
@@ -547,8 +542,6 @@ Ahhh, we missed one spot. We need to check if `Elf.shstrtab_sect_index != null` 
 After this change, you should not experience any panics when re-running the linker:
 
 ```
-$ zig build
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
 debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
   atoms
@@ -599,7 +592,6 @@ debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 
 Let's re-analyse the produced binary with `zelf`:
 
 ```
-$ zelf -h -l a.out
 ELF Header:
   Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
   Class:                             ELF64
@@ -734,7 +726,6 @@ sections such as `SHT_SYMTAB` and `SHT_STRTAB`.
 Let's try re-running the linker on the input:
 
 ```
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
 thread 82707 panic: reached unreachable code
 /home/kubkon/opt/lib/zig/std/debug.zig:286:14: 0x21f50c in assert (syclld)
@@ -768,7 +759,6 @@ the logic here as we haven't yet populated the output section's max alignment va
 this in the next step. In the meantime, let's comment out the logic in this function and see if this fixes it for us.
 
 ```
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
 debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
   atoms
@@ -848,7 +838,6 @@ perform something as follows. For each `Atom`, we pull `Atom`'s assigned output 
 Simultaneously, we work out `Atom`'s relative offset within the section based on its current size and `Atom`'s alignment.
 
 ```
-$ syclld simple.o --debug-log elf --debug-log state
 debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
 debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
   atoms
@@ -935,3 +924,495 @@ As a prep for the next step, we will do something rather naughty. Namely, we wil
 handling. It's not the first time we've done something like this and so far this has worked out fine for us.
 Navigate to `Atom.resolveRelocs` and change `elf_file.fatal` to `elf_file.warn` to reminds us that we still need
 to cover this very crucial bit.
+
+### Part 6 - allocating segments, sections, and atoms
+
+We are now in position to allocate segments, sections, and atoms. First, we will
+allocate segments. Navigate to `Elf.allocateSegments`. The trick about segments is that the sections each
+segment encompasses should share the same memory permissions. For instance, `.rodata` which is read-only should
+be contained within a read-only segment. `.text` on the other hand which is executable but not writable should
+be contained within a read-exec segment. A naive approach would be to create a segment per section but this will
+be pretty wasteful as each loadable is at least page size aligned which for `x86_64` is 4KB. Therefore, before
+allocating segments we sort sections in such a way so that they are contiguous in memory *and* share permissions.
+The sorting of sections has already been done for us and you can inspect it in `Elf.sortSections`.
+
+Because sections are sorted, our allocation algorithm should iterate over the segments, get contained sections
+for each segment (you can use `Elf.getSectionIndexes` to do just that), and calculate each segment's size, file and memory alignment, and offsets. While working on this we need to bear in mind one thing that the first
+loadable segment which necessarily will be read-only has to encompass in its range the ELF header `Elf64_Ehdr` and table of program headers (or the `PT_PHDR` program header as these are equivalent).
+
+```
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
+  atoms
+    atom(1) : .text : @0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : sect(1) : synthetic
+    %2 : __init_array_end : @0 : sect(1) : synthetic
+    %3 : __fini_array_start : @0 : sect(1) : synthetic
+    %4 : __fini_array_end : @0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @0 (0) : align(10) : size(16)
+sect(2) : .debug_abbrev : @0 (0) : align(1) : size(27)
+sect(3) : .debug_info : @0 (0) : align(1) : size(40)
+sect(4) : .debug_str : @0 (0) : align(1) : size(93)
+sect(5) : .debug_line : @0 (0) : align(1) : size(42)
+sect(6) : .symtab : @0 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @0 (0) : align(1) : size(53)
+sect(8) : .strtab : @0 (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(a8) : memsz(a8)
+phdr(1) : __R : @0 (200000) : align(1000) : filesz(e8) : memsz(e8)
+phdr(2) : X_R : @f0 (2010f0) : align(1000) : filesz(16) : memsz(16)
+
+
+debug(elf): writing atoms in '.text' section
+debug(elf): writing ATOM(%1,'.text') at offset 0x0
+debug(elf): writing atoms in '.debug_abbrev' section
+debug(elf): writing ATOM(%2,'.debug_abbrev') at offset 0x0
+debug(elf): writing atoms in '.debug_info' section
+debug(elf): writing ATOM(%3,'.debug_info') at offset 0x0
+debug(elf): writing atoms in '.debug_str' section
+debug(elf): writing ATOM(%4,'.debug_str') at offset 0x0
+debug(elf): writing atoms in '.debug_line' section
+debug(elf): writing ATOM(%5,'.debug_line') at offset 0x0
+debug(elf): writing program headers from 0x40 to 0xe8
+debug(elf): writing '.symtab' contents from 0x0 to 0x0
+debug(elf): writing '.strtab' contents from 0x0 to 0x1
+debug(elf): writing '.shstrtab' contents from 0x0 to 0x53
+debug(elf): writing section headers from 0x0 to 0x240
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 0, .e_phoff = 64, .e_shoff = 0, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 3, .e_shentsize = 64, .e_shnum = 0, .e_shstrndx = 0 } at 0x0
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+```
+
+As you can see in the logs, we have allocated the output segments. Next up, allocating sections. Navigate to `Elf.allocateAllocSections`. We need to remember not to touch non-alloc sections as they are handled separately since they don't need to be loaded into memory. Given that we have the segments already laid out in file and
+memory, we can iterate each segment, get all sections contained within and set their file and memory offsets.
+Once we are done with this, don't forget to uncomment code in `Elf.allocateNonAllocSections`.
+
+If we now try to run the linker, we should see a panic due to integer overflow:
+
+```
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
+  atoms
+    atom(1) : .text : @0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : sect(1) : synthetic
+    %2 : __init_array_end : @0 : sect(1) : synthetic
+    %3 : __fini_array_start : @0 : sect(1) : synthetic
+    %4 : __fini_array_end : @0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @f0 (2010f0) : align(10) : size(16)
+sect(2) : .debug_abbrev : @106 (0) : align(1) : size(27)
+sect(3) : .debug_info : @12d (0) : align(1) : size(40)
+sect(4) : .debug_str : @16d (0) : align(1) : size(93)
+sect(5) : .debug_line : @200 (0) : align(1) : size(42)
+sect(6) : .symtab : @248 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @248 (0) : align(1) : size(53)
+sect(8) : .strtab : @29b (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(a8) : memsz(a8)
+phdr(1) : __R : @0 (200000) : align(1000) : filesz(e8) : memsz(e8)
+phdr(2) : X_R : @f0 (2010f0) : align(1000) : filesz(16) : memsz(16)
+
+
+debug(elf): writing atoms in '.text' section
+thread 94123 panic: integer overflow
+/home/kubkon/dev/syclld/src/Elf.zig:903:36: 0x2446de in writeAtoms (syclld)
+            const off = atom.value - shdr.sh_addr;
+                                   ^
+/home/kubkon/dev/syclld/src/Elf.zig:299:24: 0x247090 in flush (syclld)
+    try self.writeAtoms();
+                       ^
+/home/kubkon/dev/syclld/src/main.zig:136:18: 0x24a5b5 in main (syclld)
+    try elf.flush();
+                 ^
+/home/kubkon/opt/lib/zig/std/start.zig:609:37: 0x21d96e in posixCallMainAndExit (syclld)
+            const result = root.main() catch |err| {
+                                    ^
+/home/kubkon/opt/lib/zig/std/start.zig:368:5: 0x21d3d1 in _start (syclld)
+    @call(.never_inline, posixCallMainAndExit, .{});
+    ^
+fish: Job 1, '../../syclld/zig-out/bin/syclld…' terminated by signal SIGABRT (Abort)
+```
+
+OK, this is easy to fix! We simply need to allocate `Atom`s next! Navigate to `Elf.allocateAtoms`. This bit should be very straightforward to implement. For each `Atom` we simply get the output section and add its
+allocated address to each `Atom`'s `value` field. This is enough as we have already calculated each `Atom`'s
+relative offset with respect to start of the containing output section, and we are guaranteed that the final
+address of each `Atom` will be properly aligned as each section is aligned to the `Atom` with the largest
+alignment.
+
+Re-running the linker on the input generates logs:
+
+```
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
+  atoms
+    atom(1) : .text : @2010f0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : sect(1) : synthetic
+    %2 : __init_array_end : @0 : sect(1) : synthetic
+    %3 : __fini_array_start : @0 : sect(1) : synthetic
+    %4 : __fini_array_end : @0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @f0 (2010f0) : align(10) : size(16)
+sect(2) : .debug_abbrev : @106 (0) : align(1) : size(27)
+sect(3) : .debug_info : @12d (0) : align(1) : size(40)
+sect(4) : .debug_str : @16d (0) : align(1) : size(93)
+sect(5) : .debug_line : @200 (0) : align(1) : size(42)
+sect(6) : .symtab : @248 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @248 (0) : align(1) : size(53)
+sect(8) : .strtab : @29b (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(a8) : memsz(a8)
+phdr(1) : __R : @0 (200000) : align(1000) : filesz(e8) : memsz(e8)
+phdr(2) : X_R : @f0 (2010f0) : align(1000) : filesz(16) : memsz(16)
+
+
+debug(elf): writing atoms in '.text' section
+debug(elf): writing ATOM(%1,'.text') at offset 0xf0
+debug(elf): writing atoms in '.debug_abbrev' section
+debug(elf): writing ATOM(%2,'.debug_abbrev') at offset 0x106
+debug(elf): writing atoms in '.debug_info' section
+debug(elf): writing ATOM(%3,'.debug_info') at offset 0x12d
+debug(elf): writing atoms in '.debug_str' section
+debug(elf): writing ATOM(%4,'.debug_str') at offset 0x16d
+debug(elf): writing atoms in '.debug_line' section
+debug(elf): writing ATOM(%5,'.debug_line') at offset 0x200
+debug(elf): writing program headers from 0x40 to 0xe8
+debug(elf): writing '.symtab' contents from 0x248 to 0x248
+debug(elf): writing '.strtab' contents from 0x29b to 0x29c
+debug(elf): writing '.shstrtab' contents from 0x248 to 0x29b
+debug(elf): writing section headers from 0x0 to 0x240
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 0, .e_phoff = 64, .e_shoff = 0, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 3, .e_shentsize = 64, .e_shnum = 0, .e_shstrndx = 0 } at 0x0
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+```
+
+Note how segments, sections and atoms are now allocated in the logs. Let's now inspect the output file with
+`zelf`:
+
+```
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          0 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         3
+  Size of section headers:           64 (bytes)
+  Number of section headers:         0
+  Section header string table index: 0
+
+There are 0 section headers, starting at offset 0x0:
+
+Section Headers:
+  [Nr]  Name              Type              Address           Offset
+        Size              EntSize           Flags  Link  Info  Align
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)
+
+Entry point 0x0
+There are 3 program headers, starting at offset 64
+
+Program Headers:
+  Type             Offset           VirtAddr         PhysAddr        
+                   FileSiz          MemSiz           Flags  Align
+  DYNAMIC          0000000000000006 00000000002010f0 00000000000000f0
+                   0000000000000016 0000000000000000 E      000010
+  NULL             0000000100000008 0000000000000000 0000000000000000
+                   0000000000000106 0000000000000027        000000
+  LOAD             0000000000000000 0000000100000016 0000000000000000
+                   0000000000000000 000000000000012d        000040
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     
+   01     
+   02     
+
+There is no relocation info in this file.
+
+There is no symbol table in this file.
+```
+
+This output looks familiar! It seems that we are overwriting the program headers with some bogus data. Firstly,
+let's fix writing the header as we are still not setting the number of section headers properly, and that
+we have allocated them, we are in position to do that. Next, we also need to set `Elf.shoff` to a correct
+value. If you recall, section header table goes at the end of the file, so we can calculate this value by
+taking the last section's offset and its size, and aligning the value to `Elf64_Shdr`.
+
+Let's rerun the linker again, and let's reinspect the binary with `zelf`:
+
+```
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          672 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         3
+  Size of section headers:           64 (bytes)
+  Number of section headers:         9
+  Section header string table index: 0
+
+There are 9 section headers, starting at offset 0x2a0:
+
+Section Headers:
+  [Nr]  Name              Type              Address           Offset
+        Size              EntSize           Flags  Link  Info  Align
+  [ 0]  <no-strings>      NULL              0000000000000000  0000000000000000
+        0000000000000000  0000000000000000            0     0     0
+  [ 1]  <no-strings>      PROGBITS          00000000002010f0  00000000000000f0
+        0000000000000016  0000000000000000  AX        0     0    16
+  [ 2]  <no-strings>      PROGBITS          0000000000000000  0000000000000106
+        0000000000000027  0000000000000000            0     0     1
+  [ 3]  <no-strings>      PROGBITS          0000000000000000  000000000000012d
+        0000000000000040  0000000000000000            0     0     1
+  [ 4]  <no-strings>      PROGBITS          0000000000000000  000000000000016d
+        0000000000000093  0000000000000000  MS        0     0     1
+  [ 5]  <no-strings>      PROGBITS          0000000000000000  0000000000000200
+        0000000000000042  0000000000000000            0     0     1
+  [ 6]  <no-strings>      SYMTAB            0000000000000000  0000000000000248
+        0000000000000000  0000000000000018            8     0     8
+  [ 7]  <no-strings>      STRTAB            0000000000000000  0000000000000248
+        0000000000000053  0000000000000001            0     0     1
+  [ 8]  <no-strings>      STRTAB            0000000000000000  000000000000029b
+        0000000000000001  0000000000000001            0     0     1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)
+
+Entry point 0x0
+There are 3 program headers, starting at offset 64
+
+Program Headers:
+  Type             Offset           VirtAddr         PhysAddr        
+                   FileSiz          MemSiz           Flags  Align
+  PHDR             0000000000000040 0000000000200040 0000000000200040
+                   00000000000000a8 00000000000000a8 R      000008
+  LOAD             0000000000000000 0000000000200000 0000000000200000
+                   00000000000000e8 00000000000000e8 R      001000
+  LOAD             00000000000000f0 00000000002010f0 00000000002010f0
+                   0000000000000016 0000000000000016 RE     001000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     
+   01     
+   02     <no-strings>
+
+There is no relocation info in this file.
+
+Symbol table '<no-strings>' contains 0 entries:
+  Num:            Value  Size Type    Bind   Vis      Ndx   Name
+```
+
+This looks almost good if not for the fact we forgot to set the index to `.shstrtab` string table which
+contains names of the section headers! Let's fix it up in `Elf.writeHeader`. Now, let's rerun and reinspect
+the binary with `zelf`:
+
+```
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          672 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         3
+  Size of section headers:           64 (bytes)
+  Number of section headers:         9
+  Section header string table index: 7
+
+There are 9 section headers, starting at offset 0x2a0:
+
+Section Headers:
+  [Nr]  Name              Type              Address           Offset
+        Size              EntSize           Flags  Link  Info  Align
+  [ 0]                    NULL              0000000000000000  0000000000000000
+        0000000000000000  0000000000000000            0     0     0
+  [ 1]  .text             PROGBITS          00000000002010f0  00000000000000f0
+        0000000000000016  0000000000000000  AX        0     0    16
+  [ 2]  .debug_abbrev     PROGBITS          0000000000000000  0000000000000106
+        0000000000000027  0000000000000000            0     0     1
+  [ 3]  .debug_info       PROGBITS          0000000000000000  000000000000012d
+        0000000000000040  0000000000000000            0     0     1
+  [ 4]  .debug_str        PROGBITS          0000000000000000  000000000000016d
+        0000000000000093  0000000000000000  MS        0     0     1
+  [ 5]  .debug_line       PROGBITS          0000000000000000  0000000000000200
+        0000000000000042  0000000000000000            0     0     1
+  [ 6]  .symtab           SYMTAB            0000000000000000  0000000000000248
+        0000000000000000  0000000000000018            8     0     8
+  [ 7]  .shstrtab         STRTAB            0000000000000000  0000000000000248
+        0000000000000053  0000000000000001            0     0     1
+  [ 8]  .strtab           STRTAB            0000000000000000  000000000000029b
+        0000000000000001  0000000000000001            0     0     1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), l (large), p (processor specific)
+
+Entry point 0x0
+There are 3 program headers, starting at offset 64
+
+Program Headers:
+  Type             Offset           VirtAddr         PhysAddr        
+                   FileSiz          MemSiz           Flags  Align
+  PHDR             0000000000000040 0000000000200040 0000000000200040
+                   00000000000000a8 00000000000000a8 R      000008
+  LOAD             0000000000000000 0000000000200000 0000000000200000
+                   00000000000000e8 00000000000000e8 R      001000
+  LOAD             00000000000000f0 00000000002010f0 00000000002010f0
+                   0000000000000016 0000000000000016 RE     001000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     
+   01     
+   02     .text
+
+There is no relocation info in this file.
+
+Symbol table '.symtab' contains 0 entries:
+  Num:            Value  Size Type    Bind   Vis      Ndx   Name
+```
+
+Now look at this marvel! If we try running the binary however...
+
+```
+$ ./a.out
+fish: Job 1, './a.out' terminated by signal SIGSEGV (Address boundary error)
+```
+
+Ahhh, it's time to allocate symbols and set the entrypoint address!
