@@ -830,3 +830,108 @@ debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 
 
 Hah! This is looking good! You can see we have initialised 9 output sections and spawned a new program header with
 `X_R` permissions which is exactly what we wanted to do.
+
+### Part 5 - calculating output section sizes, max alignment, and relative Atom offsets
+
+We are finally getting to something more interesting! Now that we have correctly created output sections we can start
+thinking about allocating them in file and in memory. But this problem is best handled in a couple of stages. The
+first stage we will focus on is actually adding each `Atom` to the right output section's linked-list of `Atom`'s -
+have a look at the fields of `Section` structure. Simultaneously we will add its size (with padding if required) 
+bumping section's total size, and also adjust section's max alignment which will always equal alignment of the 
+`Atom` with largest alignment. When we add an `Atom` to the section and calculate any padding and bump up section's 
+size, we can also calculate each `Atom`'s relative offset with respect to the start of the section assuming that each 
+section starts at offset of `0`. This way, when we get to allocating the section in file and in memory, we will only 
+need to add the section's absolute offset/memory to each `Atom`'s precomputed offset in this step.
+
+Navigate to `Elf.calcSectionSizes` function. This is where we will want to do it all. The logic for this function should
+perform something as follows. For each `Atom`, we pull `Atom`'s assigned output `Section` and append it to the linked-list.
+Simultaneously, we work out `Atom`'s relative offset within the section based on its current size and `Atom`'s alignment.
+
+```
+$ syclld simple.o --debug-log elf --debug-log state
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
+  atoms
+    atom(1) : .text : @0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : sect(1) : synthetic
+    %2 : __init_array_end : @0 : sect(1) : synthetic
+    %3 : __fini_array_start : @0 : sect(1) : synthetic
+    %4 : __fini_array_end : @0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @0 (0) : align(10) : size(16)
+sect(2) : .debug_abbrev : @0 (0) : align(1) : size(27)
+sect(3) : .debug_info : @0 (0) : align(1) : size(40)
+sect(4) : .debug_str : @0 (0) : align(1) : size(93)
+sect(5) : .debug_line : @0 (0) : align(1) : size(42)
+sect(6) : .symtab : @0 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @0 (0) : align(1) : size(53)
+sect(8) : .strtab : @0 (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(a8) : memsz(a8)
+phdr(1) : __R : @0 (0) : align(1000) : filesz(0) : memsz(0)
+phdr(2) : X_R : @0 (0) : align(1000) : filesz(0) : memsz(0)
+
+
+debug(elf): writing atoms in '.text' section
+debug(elf): writing ATOM(%1,'.text') at offset 0x0
+debug(elf): writing atoms in '.debug_abbrev' section
+debug(elf): writing ATOM(%2,'.debug_abbrev') at offset 0x0
+debug(elf): writing atoms in '.debug_info' section
+debug(elf): writing ATOM(%3,'.debug_info') at offset 0x0
+debug(elf): writing atoms in '.debug_str' section
+debug(elf): writing ATOM(%4,'.debug_str') at offset 0x0
+debug(elf): writing atoms in '.debug_line' section
+debug(elf): writing ATOM(%5,'.debug_line') at offset 0x0
+debug(elf): writing program headers from 0x40 to 0xe8
+debug(elf): writing '.symtab' contents from 0x0 to 0x0
+debug(elf): writing '.strtab' contents from 0x0 to 0x1
+debug(elf): writing '.shstrtab' contents from 0x0 to 0x53
+debug(elf): writing section headers from 0x0 to 0x240
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 0, .e_phoff = 64, .e_shoff = 0, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 3, .e_shentsize = 64, .e_shnum = 0, .e_shstrndx = 0 } at 0x0
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_64
+error: unhandled relocation type: R_X86_64_64
+error: unhandled relocation type: R_X86_64_32
+error: unhandled relocation type: R_X86_64_64
+```
+
+Yooo, check it out! We have progressed enough to cause errors in the linker to do with missing relocation handling!
+This is excellent, however, we definitely do not want to focus on it just yet! Now that we have calculated section
+sizes, we want to carry on with allocating sections, segments and atoms in memory!
+
+As a prep for the next step, we will do something rather naughty. Namely, we will completely ignore relocation
+handling. It's not the first time we've done something like this and so far this has worked out fine for us.
+Navigate to `Atom.resolveRelocs` and change `elf_file.fatal` to `elf_file.warn` to reminds us that we still need
+to cover this very crucial bit.
