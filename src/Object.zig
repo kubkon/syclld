@@ -124,8 +124,7 @@ fn initAtoms(self: *Object, elf_file: *Elf) !void {
     //    (do the so-called fixups).
 }
 
-fn skipShdr(self: Object, index: u32) bool {
-    const shdr = self.getShdrs()[index];
+fn skipShdr(self: Object, shdr: elf.Elf64_Shdr) bool {
     const ignore = switch (shdr.sh_type) {
         elf.SHT_NULL,
         elf.SHT_REL,
