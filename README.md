@@ -174,4 +174,19 @@ the latter during symbol resolution.
 In order to create a new global `Symbol` instance, we can use `Elf.getOrCreateGlobal`. In order to populate a
 global `Symbol` we can use `Object.setGlobal`.
 
+Now, let's try re-running the linker and see what happens:
+
+```
+$ syclld simple.o
+```
+
+Oh, no error! What if we try running the generated binary file?
+
+```
+$ ./a.out
+exec: Failed to execute process: './a.out' the file could not be run by the operating system.
+```
+
+OK, progress! We have generated *something* but the OS still doesn't really understand what that is. However, this is
+a good starting point to ironing out some common things.
 
