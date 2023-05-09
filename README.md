@@ -317,4 +317,357 @@ ELF Header:
   Section header string table index: 0
 ```
 
+In this example, we have purposely hard-coded number of program and section headers to `0`. Let's relax this a little.
 
+### Part 3 - writing program headers
+
+The logic responsible for creating program headers (well, mostly loadable segments) can be found in `Elf.initSegments`.
+As you will notice this bit of code was done for us. The logic is fairly simple. It always creater `PT_PHDR` program
+header as the first non-loadable segment. This segment is responsible for encapsulating the program header table for
+the loader. Next, we always create a loadable read-only segment with the intention that it will encapsulate
+the `Elf64_Ehdr` header and the `PT_PHDR` segment.
+
+So far so good. Let's fix the logic in `Elf.writePhdrs` to write the program headers at the correct offset in the file.
+Next, let's fixup the number of program headers in the `Elf64_Ehdr` in `Elf.writeHeader`. Note that you can dynamically
+get the number of defined program headers by inspecting the length of `Elf.phdrs` arraylist. Once you are done, you
+should see something like this when inspecting the generated binary with `zelf`:
+
+```
+$ syclld simple.o
+$ zelf -h -l a.out
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          0 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         2
+  Size of section headers:           64 (bytes)
+  Number of section headers:         0
+  Section header string table index: 0
+
+Entry point 0x0
+There are 2 program headers, starting at offset 64
+
+Program Headers:
+  Type             Offset           VirtAddr         PhysAddr        
+                   FileSiz          MemSiz           Flags  Align
+  DYNAMIC          0000000000000000 0000000000000000 0000000000000000
+                   0000000000000000 0000000000000000        000000
+  NULL             0000000000000008 0000000000000000 0000000000000000
+                   0000000000000000 0000000000000000        000000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     
+   01
+```
+
+Do you think this output matches our expected value? If you recall, `Elf.initSegments` should create only two program
+headers currently: `PT_PHDR` and `PT_LOAD` with read-only permissions. Instead what we see are two program headers
+`PT_DYNAMIC` and `PT_NULL` neither of which we didn't create nor expect to create during this workshop. Clearly, something
+is amiss. Let's inspect the logs of the linker while we link this result:
+
+```
+$ syclld simple.o --debug-log elf --debug-log state
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
+  atoms
+    atom(1) : .text : @0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : sect(1) : synthetic
+    %2 : __init_array_end : @0 : sect(1) : synthetic
+    %3 : __fini_array_start : @0 : sect(1) : synthetic
+    %4 : __fini_array_end : @0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @0 (0) : align(0) : size(0)
+sect(2) : .debug_abbrev : @0 (0) : align(0) : size(0)
+sect(3) : .debug_info : @0 (0) : align(0) : size(0)
+sect(4) : .debug_str : @0 (0) : align(0) : size(0)
+sect(5) : .debug_line : @0 (0) : align(0) : size(0)
+sect(6) : .symtab : @0 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @0 (0) : align(1) : size(53)
+sect(8) : .strtab : @53 (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(70) : memsz(70)
+phdr(1) : __R : @0 (0) : align(1000) : filesz(0) : memsz(0)
+
+
+debug(elf): writing program headers from 0x40 to 0xb0
+debug(elf): writing '.symtab' contents from 0x0 to 0x0
+debug(elf): writing '.strtab' contents from 0x53 to 0x54
+debug(elf): writing '.shstrtab' contents from 0x0 to 0x53
+debug(elf): writing section headers from 0x0 to 0x240
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 0, .e_phoff = 64, .e_shoff = 0, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 2, .e_shentsize = 64, .e_shnum = 0, .e_shstrndx = 0 } at 0x0
+```
+
+OK, so we have indeed created two program headers, both with read-only permissions, but somehow this is not what ends up
+in the produced executable file. Can you spot the bug?
+
+If you look closely towards the end of the log output, you will see that we correctly write out the program headers
+table at offset `0x40` (`64` in decimal), however, immediately afterwards we overwrite it with the contents of
+`.shstrtab` and the section headers! Inspecting the code further, we can see that we do create some special sections
+such as `.symtab`, `.strtab` and `.shstrtab` in `Elf.initSections` function. So we could try and rectify it right here
+and now, but then this adds yet another point of potential bugs. Instead, let us comment out the contents of
+`Elf.initSections` until we are ready to fix it.
+
+Rebuild and rerun the linker:
+
+```
+$ zig build
+$ syclld simple.o --debug-log elf --debug-log state
+thread 59471 panic: attempt to use null value
+/home/kubkon/dev/syclld/src/Elf.zig:798:70: 0x246e69 in setShstrtab (syclld)
+    const shdr = &self.sections.items(.shdr)[self.shstrtab_sect_index.?];
+                                                                     ^
+/home/kubkon/dev/syclld/src/Elf.zig:289:21: 0x24556e in flush (syclld)
+    self.setShstrtab();
+                    ^
+/home/kubkon/dev/syclld/src/main.zig:136:18: 0x247b95 in main (syclld)
+    try elf.flush();
+                 ^
+/home/kubkon/opt/lib/zig/std/start.zig:609:37: 0x21d5ae in posixCallMainAndExit (syclld)
+            const result = root.main() catch |err| {
+                                    ^
+/home/kubkon/opt/lib/zig/std/start.zig:368:5: 0x21d011 in _start (syclld)
+    @call(.never_inline, posixCallMainAndExit, .{});
+    ^
+fish: Job 1, '../../syclld/zig-out/bin/syclld…' terminated by signal SIGABRT (Abort)
+```
+
+Oops, we always expect `.shstrtab` to be created. That's fair enough, but for now let's relax this assumption
+by checking if we have indeed created the `.shstrtab` section header. Navigate to `Elf.setShstrtab` and check if
+`Elf.shstrtab_sect_index != null`. If not, we will exit the function without setting the `.shstrtab` section header.
+
+Rebuild and rerun the linker:
+
+```
+$ zig build
+$ syclld simple.o --debug-log elf --debug-log state
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
+  atoms
+    atom(1) : .text : @0 : sect(0) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(0) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(0) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(0) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(0) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : absolute : synthetic
+    %2 : __init_array_end : @0 : absolute : synthetic
+    %3 : __fini_array_start : @0 : absolute : synthetic
+    %4 : __fini_array_end : @0 : absolute : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(70) : memsz(70)
+phdr(1) : __R : @0 (0) : align(1000) : filesz(0) : memsz(0)
+
+
+debug(elf): writing program headers from 0x40 to 0xb0
+thread 59890 panic: attempt to use null value
+/home/kubkon/dev/syclld/src/Elf.zig:873:69: 0x243eab in writeShStrtab (syclld)
+    const shdr = self.sections.items(.shdr)[self.shstrtab_sect_index.?];
+                                                                    ^
+/home/kubkon/dev/syclld/src/Elf.zig:304:27: 0x245766 in flush (syclld)
+    try self.writeShStrtab();
+                          ^
+/home/kubkon/dev/syclld/src/main.zig:136:18: 0x247b95 in main (syclld)
+    try elf.flush();
+                 ^
+/home/kubkon/opt/lib/zig/std/start.zig:609:37: 0x21d5ae in posixCallMainAndExit (syclld)
+            const result = root.main() catch |err| {
+                                    ^
+/home/kubkon/opt/lib/zig/std/start.zig:368:5: 0x21d011 in _start (syclld)
+    @call(.never_inline, posixCallMainAndExit, .{});
+    ^
+fish: Job 1, '../../syclld/zig-out/bin/syclld…' terminated by signal SIGABRT (Abort)
+```
+
+Ahhh, we missed one spot. We need to check if `Elf.shstrtab_sect_index != null` in `Elf.writeShStrtab` also.
+After this change, you should not experience any panics when re-running the linker:
+
+```
+$ zig build
+$ syclld simple.o --debug-log elf --debug-log state
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/simple.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/simple.o
+  atoms
+    atom(1) : .text : @0 : sect(0) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(0) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(0) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(0) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(0) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @0 : absolute : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : absolute : atom(2) : file(0)
+    %4 : .debug_info : @0 : absolute : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : absolute : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : absolute : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @0 : absolute : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @0 : absolute : synthetic
+    %2 : __init_array_end : @0 : absolute : synthetic
+    %3 : __fini_array_start : @0 : absolute : synthetic
+    %4 : __fini_array_end : @0 : absolute : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(70) : memsz(70)
+phdr(1) : __R : @0 (0) : align(1000) : filesz(0) : memsz(0)
+
+
+debug(elf): writing program headers from 0x40 to 0xb0
+debug(elf): writing section headers from 0x0 to 0x40
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 0, .e_phoff = 64, .e_shoff = 0, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 2, .e_shentsize = 64, .e_shnum = 0, .e_shstrndx = 0 } at 0x0
+```
+
+Let's re-analyse the produced binary with `zelf`:
+
+```
+$ zelf -h -l a.out
+ELF Header:
+  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
+  Class:                             ELF64
+  Data:                              2's complement, little endian
+  Version:                           1 (current)
+  OS/ABI:                            UNIX - System V
+  ABI Version:                       0
+  Type:                              EXEC (Executable file)
+  Machine:                           Advanced Micro Devices X86-64
+  Version:                           0x1
+  Entry point address:               0x0
+  Start of program headers:          64 (bytes into file)
+  Start of section headers:          0 (bytes into file)
+  Flags:                             0x0
+  Size of this header:               64 (bytes)
+  Size of program headers:           56 (bytes)
+  Number of program headers:         2
+  Size of section headers:           64 (bytes)
+  Number of section headers:         0
+  Section header string table index: 0
+
+Entry point 0x0
+There are 2 program headers, starting at offset 64
+
+Program Headers:
+  Type             Offset           VirtAddr         PhysAddr        
+                   FileSiz          MemSiz           Flags  Align
+  PHDR             0000000000000040 0000000000200040 0000000000200040
+                   0000000000000070 0000000000000070 R      000008
+  LOAD             0000000000000000 0000000000000000 0000000000000000
+                   0000000000000000 0000000000000000 R      001000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     
+   01
+```
+
+Woohoo, success! You can now try running the binary. The error should now change into my personal favourite error
+type, the segmentation fault:
+
+```
+$ ./a.out
+fish: Job 1, './a.out' terminated by signal SIGSEGV (Address boundary error)
+$ gdb a.out
+GNU gdb (GDB) 12.1
+Copyright (C) 2022 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "x86_64-unknown-linux-gnu".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from a.out...
+(No debugging symbols found in a.out)
+(gdb) r
+Starting program: /home/kubkon/dev/zld/examples/a.out 
+
+Program received signal SIGSEGV, Segmentation fault.
+0x0000000000000000 in ?? ()
+(gdb)
+```
+
+Excellent! We can give ourselves a pat on the back - we have made more progress!
