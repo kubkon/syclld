@@ -1416,3 +1416,115 @@ fish: Job 1, './a.out' terminated by signal SIGSEGV (Address boundary error)
 ```
 
 Ahhh, it's time to allocate symbols and set the entrypoint address!
+
+### Part 7 - allocating symbols
+
+If you recall, when we were parsing input relocatable object files, we unpacked two tightly related entities: input
+sections into `Atom`s, and input symbols into `Symbol`s. You would think that we should allocate `Symbol`s somewhat
+earlier, perhaps with `Atom`s or even output sections. Well, it turns out this is not required, as each `Symbol` has
+an index into defining `Atom`. Therefore, allocating `Symbol`s should be straightforward and should amount to adding
+`Atom`'s `value` to the `Symbol`'s value. Navigate to `Elf.allocateLocals` and let's implement this idea.
+
+If the `Atom` doesn't exist, e.g., for `ST_ABS` symbols, what do you think we should do? In this case, we are safe to
+skip allocating the `Symbol`. Next up is `Elf.allocateGlobals`. For globals, there is no need to iterate over
+input object files as all globals are conveniently located in linker's global scope. Having said that if we were
+toying with the idea of parallelising the linker similarly to how `mold` does it, we would then make allocating
+globals via each input object file work in a separate thread.
+
+OK! That should be it! Let's rerun the linker.
+
+```
+debug(elf): parsing input file path '/home/kubkon/dev/zld/examples/empty.o'
+debug(state): file(0) : /home/kubkon/dev/zld/examples/empty.o
+  atoms
+    atom(1) : .text : @2010f0 : sect(1) : align(4) : size(16)
+    atom(2) : .debug_abbrev : @0 : sect(2) : align(0) : size(27)
+    atom(3) : .debug_info : @0 : sect(3) : align(0) : size(40)
+    atom(4) : .debug_str : @0 : sect(4) : align(0) : size(93)
+    atom(5) : .debug_line : @0 : sect(5) : align(0) : size(42)
+  locals
+    %0 :  : @0 : undefined
+    %1 : empty.c : @0 : absolute : file(0)
+    %2 : .text : @2010f0 : sect(1) : atom(1) : file(0)
+    %3 : .debug_abbrev : @0 : sect(2) : atom(2) : file(0)
+    %4 : .debug_info : @0 : sect(3) : atom(3) : file(0)
+    %5 : .eh_frame : @0 : absolute : file(0)
+    %6 : .debug_line : @0 : sect(5) : atom(5) : file(0)
+    %7 : .llvm_addrsig : @0 : absolute : file(0)
+    %8 : .debug_str : @0 : sect(4) : atom(4) : file(0)
+    %9 : .comment : @0 : absolute : file(0)
+  globals
+    %10 : _start : @2010f0 : sect(1) : atom(1) : file(0)
+
+linker-defined
+  globals
+    %0 : _DYNAMIC : @0 : absolute : synthetic
+    %1 : __init_array_start : @2010f0 : sect(1) : synthetic
+    %2 : __init_array_end : @2010f0 : sect(1) : synthetic
+    %3 : __fini_array_start : @2010f0 : sect(1) : synthetic
+    %4 : __fini_array_end : @2010f0 : sect(1) : synthetic
+    %5 : _GLOBAL_OFFSET_TABLE_ : @0 : absolute : synthetic
+
+GOT
+got_section:
+
+Output sections
+sect(0) :  : @0 (0) : align(0) : size(0)
+sect(1) : .text : @f0 (2010f0) : align(10) : size(16)
+sect(2) : .debug_abbrev : @106 (0) : align(1) : size(27)
+sect(3) : .debug_info : @12d (0) : align(1) : size(40)
+sect(4) : .debug_str : @16d (0) : align(1) : size(93)
+sect(5) : .debug_line : @200 (0) : align(1) : size(42)
+sect(6) : .symtab : @248 (0) : align(8) : size(0)
+sect(7) : .shstrtab : @248 (0) : align(1) : size(53)
+sect(8) : .strtab : @29b (0) : align(1) : size(1)
+
+Output segments
+phdr(0) : __R : @40 (200040) : align(8) : filesz(a8) : memsz(a8)
+phdr(1) : __R : @0 (200000) : align(1000) : filesz(e8) : memsz(e8)
+phdr(2) : X_R : @f0 (2010f0) : align(1000) : filesz(16) : memsz(16)
+
+
+debug(elf): writing atoms in '.text' section
+debug(elf): writing ATOM(%1,'.text') at offset 0xf0
+debug(elf): writing atoms in '.debug_abbrev' section
+debug(elf): writing ATOM(%2,'.debug_abbrev') at offset 0x106
+debug(elf): writing atoms in '.debug_info' section
+debug(elf): writing ATOM(%3,'.debug_info') at offset 0x12d
+debug(elf): writing atoms in '.debug_str' section
+debug(elf): writing ATOM(%4,'.debug_str') at offset 0x16d
+debug(elf): writing atoms in '.debug_line' section
+debug(elf): writing ATOM(%5,'.debug_line') at offset 0x200
+debug(elf): writing program headers from 0x40 to 0xe8
+debug(elf): writing '.symtab' contents from 0x248 to 0x248
+debug(elf): writing '.strtab' contents from 0x29b to 0x29c
+debug(elf): writing '.shstrtab' contents from 0x248 to 0x29b
+debug(elf): writing section headers from 0x2a0 to 0x4e0
+debug(elf): writing ELF header elf.Elf64_Ehdr{ .e_ident = { 127, 69, 76, 70, 2, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .e_type = elf.ET.EXEC, .e_machine = elf.EM.X86_64, .e_version = 1, .e_entry = 2101488, .e_phoff = 64, .e_shoff = 672, .e_flags = 0, .e_ehsize = 64, .e_phentsize = 56, .e_phnum = 3, .e_shentsize = 64, .e_shnum = 9, .e_shstrndx = 7 } at 0x0
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_64
+warning: unhandled relocation type: R_X86_64_32
+warning: unhandled relocation type: R_X86_64_64
+```
+
+This is looking good! What if try running the binary in its current form?
+
+```
+$ ./a.out
+```
+
+Well, I'll be damned! It seems to have worked! Let's print the exit status to confirm:
+
+```
+$ echo $status
+0
+```
+
+Wow! It worked even though we still haven't filled in all the blanks yet! This is something that is crucial to remember
+that when developing your linker (or any piece of system software) it pays off to work in small albeit verifiable steps!
+
