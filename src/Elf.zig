@@ -656,18 +656,28 @@ fn allocateAtoms(self: *Elf) void {
 }
 
 fn allocateLocals(self: *Elf) void {
-    _ = self;
     // TODO: for each object file, traverse all local symbols, get the containing Atom,
     // and add its `Atom.value` to `Symbol.value`.
     // Note that it might happen that there is no Atom for the given local symbol.
     // Can you work out why that may be the case?
+    for (self.objects.items) |*object| {
+        for (object.locals.items) |*symbol| {
+            const atom = symbol.getAtom(self) orelse continue;
+            symbol.value += atom.value;
+            symbol.shndx = atom.out_shndx;
+        }
+    }
 }
 
 fn allocateGlobals(self: *Elf) void {
-    _ = self;
     // TODO: for each global symbol, get the containing Atom, and add its `Atom.value` to `Symbol.value`.
     // Note that it might happen that there is no Atom for the given global symbol.
     // Can you work out why that may be the case?
+    for (self.globals.items) |*global| {
+        const atom = global.getAtom(self) orelse continue;
+        global.value += atom.value;
+        global.shndx = atom.out_shndx;
+    }
 }
 
 fn allocateSyntheticSymbols(self: *Elf) void {
