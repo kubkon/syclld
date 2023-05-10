@@ -100,12 +100,24 @@ pub fn resolveRelocs(self: Atom, elf_file: *Elf, writer: anytype) !void {
     const code = try gpa.dupe(u8, self.getCode(elf_file));
     defer gpa.free(code);
     const relocs = self.getRelocs(elf_file);
+    const object = self.getObject(elf_file);
 
     for (relocs) |rel| {
         // TODO: for each relocation type, we need work out what the source and target addresses are,
         // and write the result in the correct place in the Atom's code/data.
+        const target = object.getSymbol(rel.r_sym(), elf_file);
         const r_type = rel.r_type();
         switch (r_type) {
+            elf.R_X86_64_NONE => {},
+            elf.R_X86_64_64 => {
+                const target_addr = @intCast(i64, target.value) + rel.r_addend;
+                mem.writeIntLittle(i64, code[rel.r_offset..][0..8], target_addr);
+            },
+            elf.R_X86_64_32 => {
+                const target_addr = @intCast(i64, target.value) + rel.r_addend;
+                const scaled = @truncate(u32, @bitCast(u64, target_addr));
+                mem.writeIntLittle(u32, code[rel.r_offset..][0..4], scaled);
+            },
             else => {
                 elf_file.warn("unhandled relocation type: {}", .{fmtRelocType(r_type)});
             },
