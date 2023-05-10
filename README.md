@@ -1528,3 +1528,73 @@ $ echo $status
 Wow! It worked even though we still haven't filled in all the blanks yet! This is something that is crucial to remember
 that when developing your linker (or any piece of system software) it pays off to work in small albeit verifiable steps!
 
+### Part 8 - setting the symtab
+
+This is all good and well, but if we run `zelf` on the binary we still have a missing bit to fill in, namely the
+symbol table!
+
+```
+Symbol table '.symtab' contains 0 entries:
+  Num:            Value  Size Type    Bind   Vis      Ndx   Name
+```
+
+Navigate to `Elf.setSymtab`. This should be a walk in the park by now. All we need to do here is traverse each
+input object file, and decide which local symbols we want to add to the output symbol table. Afterwards, we will
+traverse the set of globals and do the same. Don't forget to set `shdr.sh_info` to the index of the first global
+symbol!
+
+Let's re-run the linker and `zelf` on the output:
+
+```
+Symbol table '.symtab' contains 2 entries:
+  Num:            Value  Size Type    Bind   Vis      Ndx   Name
+    0: 0000000000000000     0 FILE    LOCAL  DEFAULT  UND   empty.c
+    1: 00000000002010f0     0 FUNC    GLOBAL DEFAULT  1     _start
+```
+
+This is looking great! There is a point to this you know. If you remember we have debug info sections that we took
+care of before. We also need the symbol table to be able to break at symbol name in the debugger - this will be
+our critical tool for more complex linking scenarios.
+
+```
+GNU gdb (GDB) 12.1
+Copyright (C) 2022 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "x86_64-unknown-linux-gnu".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from ./a.out...
+(gdb) b _start
+Breakpoint 1 at 0x2010f4
+(gdb) r
+Starting program: /home/kubkon/dev/zld/examples/a.out 
+
+Breakpoint 1, 0x00000000002010f4 in _start ()
+(gdb) disas
+Dump of assembler code for function _start:
+   0x00000000002010f0 <+0>:	push   %rbp
+   0x00000000002010f1 <+1>:	mov    %rsp,%rbp
+=> 0x00000000002010f4 <+4>:	mov    $0x3c,%rax
+   0x00000000002010fb <+11>:	mov    $0x0,%rdi
+   0x0000000000201102 <+18>:	syscall 
+   0x0000000000201104 <+20>:	pop    %rbp
+   0x0000000000201105 <+21>:	ret    
+End of assembler dump.
+(gdb) n
+Single stepping until exit from function _start,
+which has no line number information.
+[Inferior 1 (process 118835) exited normally]
+(gdb)
+```
+
+Hmm, seems that one more thing is still missing. Ah yes, relocations!
+
