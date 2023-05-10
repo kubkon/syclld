@@ -1598,3 +1598,87 @@ which has no line number information.
 
 Hmm, seems that one more thing is still missing. Ah yes, relocations!
 
+### Part 9 - handling relocations
+
+So what the heck is this dreaded relocation? It's nothing more than a deferred address resolution. When the compiler
+spits out relocatable object files, it doesn't yet know what the exact layout of the final binary in file and in memory
+will be. Therefore, it leaves "clues" for the linker which splices everything together into one where to patch up
+the missing address values. Those "clues" are our relocations. They can also be thought of as edges in a graph where
+`Atom`s are nodes, and in fact, this is the preferred way to think about them when implementing more advanced linker
+features such garbage collection of unused sections.
+
+So what does a relocation look like? Let's use `zelf` to find out:
+
+```
+$ zelf -r simple.o
+Relocation section '.rela.debug_info' at offset 0xf8 contains 8 entries:
+  Offset        Info            Type                    Sym. Value  Sym. Name + Addend
+000000000006 00030000000a R_X86_64_32              0000000000000000 .debug_abbrev + 0
+00000000000c 00080000000a R_X86_64_32              0000000000000000 .debug_str + 2e
+000000000012 00080000000a R_X86_64_32              0000000000000000 .debug_str + 0
+000000000016 00060000000a R_X86_64_32              0000000000000000 .debug_line + 0
+00000000001a 00080000000a R_X86_64_32              0000000000000000 .debug_str + 8
+00000000001e 000200000001 R_X86_64_64              0000000000000000 .text + 0
+00000000002b 000200000001 R_X86_64_64              0000000000000000 .text + 0
+000000000039 00080000000a R_X86_64_32              0000000000000000 .debug_str + 27
+
+Relocation section '.rela.eh_frame' at offset 0x2b8 contains 1 entries:
+  Offset        Info            Type                    Sym. Value  Sym. Name + Addend
+000000000020 000200000002 R_X86_64_PC32            0000000000000000 .text + 0
+
+Relocation section '.rela.debug_line' at offset 0x318 contains 1 entries:
+  Offset        Info            Type                    Sym. Value  Sym. Name + Addend
+00000000002c 000200000001 R_X86_64_64              0000000000000000 .text + 0
+```
+
+Firstly, we can safely ignore `.rela.eh_frame` as we have purposely ignored the unwind info handling. We can thus see
+we have two types of relocations to handle: `R_X86_64_32` and `R_X86_64_64`. They are two of the simplest relocation
+types to handle, and the instruct the linker to put an absolute 32bit and 64bit address value in the placeholder
+respectively. How do we know where to write this address value? The offset field of the `Elf64_Rela` struct means a
+relative offset with respect to the start of the referenced input section. What about the address value? How do we
+work that out? Every `Elf64_Rela` structure within the info field carries a symbol index to a symbol in the input
+symbol table. Navigate to `Atom.resolveRelocs`. For each relocation type out of the two mentioned above, we want to
+get the target symbol referenced by each relocation (you can use `Object.getSymbol` helper). Having obtained the symbol
+we can simply access its `value` field which by now is fully allocated in memory (or in file for non-alloc `Atom`s).
+That's our target. Next, we need work out at what offset we should write to the `Atom`'s data block using
+`Elf64_Rela.r_offset` field.
+
+Let's re-run the linker, and fire up our debugger again. This time, if everything went according to plan, we should
+see source line info when we break on `_start` symbol:
+
+```
+GNU gdb (GDB) 12.1
+Copyright (C) 2022 Free Software Foundation, Inc.
+License GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>
+This is free software: you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+Type "show copying" and "show warranty" for details.
+This GDB was configured as "x86_64-unknown-linux-gnu".
+Type "show configuration" for configuration details.
+For bug reporting instructions, please see:
+<https://www.gnu.org/software/gdb/bugs/>.
+Find the GDB manual and other documentation resources online at:
+    <http://www.gnu.org/software/gdb/documentation/>.
+
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from ./a.out...
+(gdb) b _start
+Breakpoint 1 at 0x2010f4: file empty.c, line 2.
+(gdb) r
+Starting program: /home/kubkon/dev/zld/examples/a.out 
+
+Breakpoint 1, _start () at empty.c:2
+2	 asm volatile ("movq $60, %rax\n\t"
+(gdb) n
+[Inferior 1 (process 120116) exited normally]
+(gdb) q
+```
+
+And voila!
+
+### Part 10 - the unscripted!
+
+Well done on reaching this part. In this part of the workshop, we enter the uncharted, the unscripted! This means
+we are free to finally experiment with our linker on different inputs, the same input with more symbols, etc.
+Let's goooooo!
