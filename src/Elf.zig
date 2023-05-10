@@ -888,6 +888,52 @@ fn setSymtab(self: *Elf) !void {
     // optionally, we could exclude symbols that have hidden visibility but it is
     // not a must
 
+    const gpa = self.allocator;
+    for (self.objects.items) |object| {
+        for (object.locals.items) |sym| {
+            const s_sym = sym.getSourceSymbol(self);
+            switch (s_sym.st_type()) {
+                elf.STT_SECTION, elf.STT_NOTYPE => continue,
+                else => {},
+            }
+            switch (@intToEnum(elf.STV, s_sym.st_other)) {
+                .INTERNAL, .HIDDEN => continue,
+                else => {},
+            }
+            const name = try self.strtab.insert(gpa, sym.getName(self));
+            try self.symtab.append(gpa, .{
+                .st_name = name,
+                .st_info = s_sym.st_info,
+                .st_other = s_sym.st_other,
+                .st_shndx = sym.shndx,
+                .st_value = sym.value,
+                .st_size = 0,
+            });
+        }
+    }
+
+    {
+        const shdr = &self.sections.items(.shdr)[symtab_sect_index];
+        shdr.sh_info = @intCast(u32, self.symtab.items.len);
+    }
+
+    for (self.globals.items) |sym| {
+        const s_sym = sym.getSourceSymbol(self);
+        switch (@intToEnum(elf.STV, s_sym.st_other)) {
+            .INTERNAL, .HIDDEN => continue,
+            else => {},
+        }
+        const name = try self.strtab.insert(gpa, sym.getName(self));
+        try self.symtab.append(gpa, .{
+            .st_name = name,
+            .st_info = s_sym.st_info,
+            .st_other = s_sym.st_other,
+            .st_shndx = sym.shndx,
+            .st_value = sym.value,
+            .st_size = 0,
+        });
+    }
+
     // Set the section sizes
     {
         const shdr = &self.sections.items(.shdr)[symtab_sect_index];
