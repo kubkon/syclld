@@ -17,7 +17,7 @@ We will need the following tools to work through the workshop:
 
 * `git` - OS dependent
 * `zig` - [`ziglang.org/download`](https://ziglang.org/download/)
-* `zelf` - [TODO]()
+* `zelf` - [`github.com/kubkon/zelf`](https://github.com/kubkon/zelf/releases/tag/v0.0.1)
 * `zig-objdump` - [TODO]()
 * `blink` - [TODO]()
 
