@@ -17,12 +17,12 @@ We will need the following tools to work through the workshop:
 
 * `git` - OS dependent
 * `zig` - [`ziglang.org/download`](https://ziglang.org/download/)
-* `zelf` - [`github.com/kubkon/zelf`](https://github.com/kubkon/zelf/releases/tag/v0.0.1)
-* `zig-objdump` - [TODO]()
-* `blink` - [TODO]()
+* `readelf` or `zelf` - [`github.com/kubkon/zelf`](https://github.com/kubkon/zelf/releases/tag/v0.0.1)
+* `objdump` or `llvm-objdump` - [`github.com/kubkon/syclld`](https://github.com/kubkon/syclld/releases/tag/untagged-d4cf3d896dbc40488e3e)
+* `gdb` or `blink` - [`github.com/kubkon/syclld`](https://github.com/kubkon/syclld/releases/tag/untagged-d4cf3d896dbc40488e3e)
 
-If you are developing natively on Linux (or in a VM!), feel free to swap out `zelf` for `readelf`,
-`zig-objdump` for `objdump`, and `blink` for `gdb`.
+For macOS and Windows users, I have provided pre-built `blink` binaries in the repo's pre-release on
+GitHub so feel free to grab it from there.
 
 Next, clone this repo:
 
@@ -129,7 +129,8 @@ In particular, we will focus on implementing two functions that are called withi
 
 #### `Object.initAtoms`
 
-TODO what is an input section? what is an atom?
+An input section aka an atom can be anything such as a machine code blob, or constant data blob, or
+global initializer blob, or thread-local inititialer blob, or zero-init imaginary blob.
 
 This function should do the following two things:
 
