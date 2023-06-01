@@ -413,7 +413,7 @@ fn sortSections(self: *Elf) !void {
         entries.appendAssumeCapacity(.{ .shndx = @intCast(u16, shndx) });
     }
 
-    std.sort.sort(Entry, entries.items, self, Entry.lessThan);
+    std.mem.sort(Entry, entries.items, self, Entry.lessThan);
 
     const backlinks = try gpa.alloc(u16, entries.items.len);
     defer gpa.free(backlinks);
@@ -1079,7 +1079,7 @@ fn renderWarningToStdErr(eb: ErrorBundle) void {
 
 fn renderWarningToWriter(eb: ErrorBundle, writer: anytype) !void {
     for (eb.getMessages()) |msg| {
-        try renderWarningMessageToWriter(eb, msg, writer, "warning", .Cyan, 0);
+        try renderWarningMessageToWriter(eb, msg, writer, "warning", .cyan, 0);
     }
 }
 
@@ -1088,27 +1088,27 @@ fn renderWarningMessageToWriter(
     err_msg_index: ErrorBundle.MessageIndex,
     stderr: anytype,
     kind: []const u8,
-    color: std.debug.TTY.Color,
+    color: std.io.tty.Color,
     indent: usize,
 ) anyerror!void {
-    const ttyconf = std.debug.detectTTYConfig(std.io.getStdErr());
+    const ttyconf = std.io.tty.detectConfig(std.io.getStdErr());
     const err_msg = eb.getErrorMessage(err_msg_index);
     try ttyconf.setColor(stderr, color);
     try stderr.writeByteNTimes(' ', indent);
     try stderr.writeAll(kind);
     try stderr.writeAll(": ");
-    try ttyconf.setColor(stderr, .Reset);
+    try ttyconf.setColor(stderr, .reset);
     const msg = eb.nullTerminatedString(err_msg.msg);
     if (err_msg.count == 1) {
         try stderr.print("{s}\n", .{msg});
     } else {
         try stderr.print("{s}", .{msg});
-        try ttyconf.setColor(stderr, .Dim);
+        try ttyconf.setColor(stderr, .dim);
         try stderr.print(" ({d} times)\n", .{err_msg.count});
     }
-    try ttyconf.setColor(stderr, .Reset);
+    try ttyconf.setColor(stderr, .reset);
     for (eb.getNotes(err_msg_index)) |note| {
-        try renderWarningMessageToWriter(eb, note, stderr, "note", .White, indent + 4);
+        try renderWarningMessageToWriter(eb, note, stderr, "note", .white, indent + 4);
     }
 }
 
@@ -1122,7 +1122,7 @@ pub fn reportWarningsAndErrors(self: *Elf) !void {
     var errors = try self.getAllErrorsAlloc();
     defer errors.deinit(self.allocator);
     if (errors.errorMessageCount() > 0) {
-        errors.renderToStdErr(.{ .ttyconf = std.debug.detectTTYConfig(std.io.getStdErr()) });
+        errors.renderToStdErr(.{ .ttyconf = std.io.tty.detectConfig(std.io.getStdErr()) });
         return error.LinkFail;
     }
 }
